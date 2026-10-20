@@ -1,5 +1,6 @@
 import { DEFAULT_STORES, REGIONS, defaultSearchUrl } from './stores.js';
 import { searchStore } from './adapters.js';
+import { searchViaTab, tabsSupported } from './tabs.js';
 import { CATEGORIES, classify, extractSize, extractConcentration, relevance, isNonFragrance } from './classify.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
 
@@ -11,6 +12,7 @@ const RATE_CURRENCIES = ['USD', 'GBP', 'CAD', 'EUR'];
 const FALLBACK_RATES = { USD: 1400, GBP: 1850, CAD: 1000, EUR: 1600, KRW: 1 }; // API 실패 시에만 사용
 const RATE_TTL = 6 * 3600 * 1000;
 const CONCURRENCY = 8;
+const TAB_CONCURRENCY = 2;   // 숨은 탭은 동시에 2개까지
 const RELEVANCE_MIN = 0.75;
 
 const state = {
@@ -20,6 +22,7 @@ const state = {
   urlOverride: {},      // storeId → 검색 URL
   filters: { boxed: true, tester: true, unboxed: true, sample: true, set: true, soldout: false, loose: false },
   sort: 'krw',
+  opts: { cookies: true, tabs: true },
   rateOverride: {},
   rates: null,          // { at, src, values: {USD: 1400, ...} }
   results: [],          // 정규화된 결과
@@ -31,7 +34,7 @@ const state = {
 // ───────── 저장소 ─────────
 async function load() {
   try {
-    const s = await api.storage.local.get(['enabled', 'custom', 'detected', 'urlOverride', 'filters', 'sort', 'rateOverride', 'rates']);
+    const s = await api.storage.local.get(['enabled', 'custom', 'detected', 'urlOverride', 'filters', 'sort', 'opts', 'rateOverride', 'rates']);
     Object.assign(state, {
       enabled: s.enabled || {},
       custom: s.custom || [],
@@ -39,6 +42,7 @@ async function load() {
       urlOverride: s.urlOverride || {},
       filters: { ...state.filters, ...(s.filters || {}) },
       sort: s.sort || 'krw',
+      opts: { ...state.opts, ...(s.opts || {}) },
       rateOverride: s.rateOverride || {},
       rates: s.rates || null,
     });
@@ -51,7 +55,7 @@ function save(...keys) {
 }
 
 const allStores = () => [...DEFAULT_STORES, ...state.custom];
-const isOn = s => state.enabled[s.id] !== false;
+const isOn = s => state.enabled[s.id] ?? !s.defaultOff;
 
 // ───────── 환율 ─────────
 async function ensureRates(force = false) {
@@ -214,6 +218,14 @@ $('optLoose').addEventListener('change', e => { state.filters.loose = e.target.c
 $('sort').addEventListener('change', e => { state.sort = e.target.value; save('sort'); renderResults(); });
 $('size').addEventListener('change', () => renderResults());
 
+function renderAdv() {
+  $('optCookies').checked = !!state.opts.cookies;
+  $('optTabs').checked = !!state.opts.tabs && tabsSupported();
+  $('optTabs').disabled = !tabsSupported();
+}
+$('optCookies').addEventListener('change', e => { state.opts.cookies = e.target.checked; save('opts'); });
+$('optTabs').addEventListener('change', e => { state.opts.tabs = e.target.checked; save('opts'); });
+
 // ───────── 검색 ─────────
 function normalizeItem(raw, store, query) {
   const size = extractSize(raw.variant, raw.title);
@@ -224,7 +236,7 @@ function normalizeItem(raw, store, query) {
     size, category,
     conc: extractConcentration(`${raw.title} ${raw.variant} ${raw.type}`),
     nonFrag: isNonFragrance(raw),
-    rel: relevance(query, raw.title, raw.vendor, raw.variant),
+    rel: relevance(query, raw.title, raw.vendor, raw.variant, raw.relHint || ''),
   };
 }
 
@@ -248,35 +260,75 @@ async function runSearch(query) {
 
   await ensureRates();
 
+  const useTabs = state.opts.tabs && tabsSupported();
+  const credentials = state.opts.cookies ? 'include' : 'omit';
+  const tabJobs = [];
+  const runTab = limiter(TAB_CONCURRENCY);
+
+  const apply = (store, res, viaTab = false) => {
+    const items = res.items.map(r => normalizeItem(r, store, query));
+    state.results.push(...items);
+    const relevant = items.filter(i => i.rel >= RELEVANCE_MIN && !i.nonFrag).length;
+    state.storeStatus[store.id] =
+      res.mode === 'error' ? (res.blocked || res.error === 'blocked' ? { state: 'blocked', error: res.error } : { state: 'err', error: res.error }) :
+      res.mode === 'link' ? { state: res.blocked ? 'blocked' : 'link', error: res.blocked ? 'blocked' : '' } :
+      { state: relevant ? 'ok' : 'none', count: relevant, viaTab };
+    renderStatus();
+    renderResults();
+  };
+
+  const queueTab = (store, fetchRes) => {
+    state.storeStatus[store.id] = { state: 'tab' };
+    renderStatus();
+    tabJobs.push(runTab(async () => {
+      const res = await searchViaTab(store, query, {
+        searchUrlOverride: state.urlOverride[store.id],
+        regionCurrency: REGION_CURRENCY[store.region] || 'USD',
+        relMin: RELEVANCE_MIN,
+      });
+      // 탭으로도 못 읽으면 처음 요청의 실패 이유(봇 차단 등)를 같이 보여줌
+      if (res.mode !== 'tab' && fetchRes?.blocked) res.blocked = true;
+      apply(store, res, true);
+    }));
+  };
+
   let idx = 0;
   const worker = async () => {
     while (idx < stores.length) {
       const store = stores[idx++];
+      if (store.tabOnly && useTabs) { queueTab(store, null); continue; }
       const res = await searchStore(store, query, {
         detected: state.detected[store.id],
         searchUrlOverride: state.urlOverride[store.id],
         regionCurrency: REGION_CURRENCY[store.region] || 'USD',
+        credentials,
       });
       if (res.detected && state.detected[store.id] !== res.detected) { state.detected[store.id] = res.detected; save('detected'); }
       if (res.resetDetected) { delete state.detected[store.id]; save('detected'); }
-      const items = res.items.map(r => normalizeItem(r, store, query));
-      state.results.push(...items);
-      const relevant = items.filter(i => i.rel >= RELEVANCE_MIN && !i.nonFrag).length;
-      state.storeStatus[store.id] =
-        res.mode === 'error' ? { state: 'err', error: res.error } :
-        res.mode === 'link' ? { state: 'link' } :
-        { state: relevant ? 'ok' : 'none', count: relevant };
-      renderStatus();
-      renderResults();
+      if (useTabs && (res.mode === 'error' || res.mode === 'link')) queueTab(store, res);
+      else apply(store, res);
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, stores.length) }, worker));
+  await Promise.all(tabJobs);
 
   state.running = false;
   $('go').disabled = false;
   renderStores();
   renderStatus();
   renderResults();
+}
+
+function limiter(n) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= n || !queue.length) return;
+    active++;
+    const { fn, resolve } = queue.shift();
+    fn().catch(() => {}).finally(() => { active--; resolve(); next(); });
+  };
+  return fn => new Promise(resolve => { queue.push({ fn, resolve }); next(); });
 }
 
 async function rememberRecent(q) {
@@ -299,17 +351,20 @@ function renderStatus() {
   box.hidden = false;
   box.innerHTML = '';
   const byId = Object.fromEntries(allStores().map(s => [s.id, s]));
-  const order = { ok: 0, none: 1, link: 2, err: 3, wait: 4 };
+  const order = { ok: 0, none: 1, tab: 2, link: 3, blocked: 4, err: 5, wait: 6 };
   entries.sort((a, b) => order[a[1].state] - order[b[1].state]);
   const needCheck = [];
   for (const [id, st] of entries) {
     const s = byId[id];
     if (!s) continue;
-    const el = document.createElement(st.state === 'wait' ? 'span' : 'a');
+    const live = st.state === 'wait' || st.state === 'tab';
+    const el = document.createElement(live ? 'span' : 'a');
     el.className = 'st ' + st.state;
-    if (st.state !== 'wait') { el.href = storeSearchLink(s); el.target = '_blank'; el.rel = 'noopener'; }
-    if (st.state === 'ok') el.textContent = `${s.name} ${st.count}`;
-    else if (st.state === 'none') el.textContent = `${s.name} 0`;
+    if (!live) { el.href = storeSearchLink(s); el.target = '_blank'; el.rel = 'noopener'; }
+    if (st.state === 'ok') el.textContent = `${s.name} ${st.count}${st.viaTab ? ' · ' + t('status.viaTab') : ''}`;
+    else if (st.state === 'tab') el.textContent = `${s.name} · ${t('status.tab')}`;
+    else if (st.state === 'blocked') { el.textContent = `${s.name} · ${t('status.blocked')}`; el.title = errText('blocked'); needCheck.push(s); }
+    else if (st.state === 'none') el.textContent = `${s.name} 0${st.viaTab ? ' · ' + t('status.viaTab') : ''}`;
     else if (st.state === 'link') { el.textContent = `${s.name} · ${t('status.check')}`; el.className = 'st link'; needCheck.push(s); }
     else if (st.state === 'err') { el.textContent = `${s.name} · ${t('status.fail')}`; el.title = errText(st.error); needCheck.push(s); }
     else el.textContent = s.name;
@@ -381,8 +436,8 @@ function renderResults() {
   items.sort((a, b) => (b.available ? 1 : 0) - (a.available ? 1 : 0));
 
   // 최저가 카드
-  const best = items.find(i => i.available && (i.category === 'boxed' || i.category === 'tester' || i.category === 'unboxed'))
-    || items.find(i => i.available);
+  const best = items.find(i => i.available && !i.partial && (i.category === 'boxed' || i.category === 'tester' || i.category === 'unboxed'))
+    || items.find(i => i.available && !i.partial);
   const bestBox = $('best');
   if (best) {
     bestBox.hidden = false;
@@ -406,13 +461,14 @@ function renderResults() {
     node.querySelector('.variant').textContent = i.variant || '';
     const badges = node.querySelector('.badges');
     const add = (t, c = '') => { const b = document.createElement('span'); b.className = 'badge ' + c; b.textContent = t; badges.appendChild(b); };
-    add(t('catShort.' + i.category), i.category === 'tester' ? 'tester' : 'cat-' + i.category);
+    if (i.partial) add(t('badge.partial'), 'partial');
+    else add(t('catShort.' + i.category), i.category === 'tester' ? 'tester' : 'cat-' + i.category);
     if (i.size) add(`${i.size}ml`);
     if (i.conc) add(concText(i.conc));
     if (!i.available) add(t('badge.soldout'), 'out');
     if (i.rel < RELEVANCE_MIN) add(t('badge.lowrel'));
     node.querySelector('.krw').textContent = fmtKRW(i.krw);
-    node.querySelector('.orig').textContent = fmtOrig(i.price, i.currency);
+    node.querySelector('.orig').textContent = fmtOrig(i.price, i.currency) + (i.priceMax ? ` ~ ${fmtOrig(i.priceMax, i.currency)}` : '');
     node.querySelector('.perml').textContent = Number.isFinite(i.perml) ? t('perml', { v: fmtKRW(i.perml) }) : '';
     frag.appendChild(node);
   }
@@ -433,6 +489,7 @@ function renderAll() {
   applyStatic();
   document.title = state.query ? `${state.query} · ${t('appName')}` : t('appName');
   renderChips();
+  renderAdv();
   renderStores();
   renderRates();
   renderStatus();
@@ -446,6 +503,7 @@ function renderAll() {
   document.title = t('appName');
   mountLangSwitch($('langSwitch'), renderAll);
   renderChips();
+  renderAdv();
   renderStores();
   renderRates();
   renderResults();

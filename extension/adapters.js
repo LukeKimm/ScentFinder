@@ -1,5 +1,5 @@
 // 사이트별 검색 방식
-// 결과 형식: { title, variant, vendor, type, price, currency, available, url, image }
+// 결과 형식: { title, variant, vendor, type, price, priceMax?, partial?, currency, available, url, image }
 
 import { defaultSearchUrl } from './stores.js';
 
@@ -7,22 +7,30 @@ const TIMEOUT_MS = 15000;
 const MAX_SHOPIFY_DETAIL = 8;
 const MAX_HTML_PRODUCT_PAGES = 4;
 
-async function request(url, kind = 'text', timeout = TIMEOUT_MS) {
+// 봇 확인 페이지 제목 (Cloudflare, Akamai, PerimeterX, DataDome 등)
+export const CHALLENGE_TITLE = /just a moment|attention required|access denied|verify(ing)? you are (a )?human|checking your browser|pardon our interruption|are you a robot|security check|request blocked/i;
+const BLOCK_CODES = /^HTTP (401|403|406|429|503)$/;
+
+export const isBlockedError = code => !!code && (code === 'blocked' || BLOCK_CODES.test(code));
+
+async function request(url, kind = 'text', { timeout = TIMEOUT_MS, credentials = 'omit' } = {}) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
   try {
     const res = await fetch(url, {
       signal: ctl.signal,
-      credentials: 'omit',
+      credentials,
       redirect: 'follow',
       headers: { Accept: kind === 'json' ? 'application/json, text/javascript, */*' : 'text/html,application/xhtml+xml' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
     if (kind === 'json') {
-      const text = await res.text();
-      try { return JSON.parse(text); } catch { throw new Error('notjson'); }
+      try { return JSON.parse(text); } catch {
+        throw new Error(CHALLENGE_TITLE.test(text.slice(0, 3000)) ? 'blocked' : 'notjson');
+      }
     }
-    return await res.text();
+    return text;
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('timeout');
     throw e;
@@ -31,7 +39,7 @@ async function request(url, kind = 'text', timeout = TIMEOUT_MS) {
   }
 }
 
-const abs = (url, base) => {
+export const abs = (url, base) => {
   if (!url) return '';
   if (url.startsWith('//')) return 'https:' + url;
   try { return new URL(url, base).href; } catch { return url; }
@@ -57,48 +65,37 @@ async function mapLimit(list, limit, fn) {
   return out;
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 // ───────────────── Shopify ─────────────────
-const shopCurrency = new Map();
-async function shopifyCurrency(base) {
-  if (shopCurrency.has(base)) return shopCurrency.get(base);
-  let cur = null;
-  try {
-    const cart = await request(`${base}/cart.js`, 'json', 8000);
-    cur = cart && cart.currency;
-  } catch { /* 무시 */ }
-  shopCurrency.set(base, cur);
-  return cur;
-}
-
-async function shopify(store, q, ctx) {
-  const base = `https://${store.domain}`;
-  const url = `${base}/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=10&resources[options][unavailable_products]=last`;
-  const data = await request(url, 'json');
-  const products = data?.resources?.results?.products;
-  if (!Array.isArray(products)) throw new Error('notshopify');
-  const currency = (await shopifyCurrency(base)) || ctx.regionCurrency;
-
-  const details = await mapLimit(products.slice(0, MAX_SHOPIFY_DETAIL), 4,
-    p => request(`${base}/products/${p.handle}.js`, 'json', 10000));
-
+// products: suggest.json 결과, details: /products/{handle}.js 결과(실패는 null)
+// detail 은 .js(가격: 센트 정수) 또는 .json({product:{variants:[{price:"18.99"}]}}) 형식 모두 처리
+export function shopifyItems(base, products, details, currency) {
   const items = [];
   products.forEach((p, idx) => {
-    const d = details[idx];
+    let d = details[idx];
+    const fromJson = !!(d && d.product);
+    if (fromJson) d = d.product;
     if (d && Array.isArray(d.variants) && d.variants.length) {
-      const img = abs(d.featured_image || p.image, base);
+      const img = abs(d.featured_image || d.image?.src || p.image, base);
       for (const v of d.variants) {
         const vt = (v.public_title || v.title || '').replace(/^Default Title$/i, '');
         items.push({
-          title: d.title, variant: vt, vendor: d.vendor || p.vendor || '', type: d.type || p.type || '',
-          price: v.price / 100, currency, available: !!v.available,
-          url: `${base}/products/${d.handle}?variant=${v.id}`,
+          title: d.title, variant: vt, vendor: d.vendor || p.vendor || '', type: d.type || d.product_type || p.type || '',
+          price: fromJson ? num(v.price) : v.price / 100, currency,
+          // .json 에는 옵션별 재고 정보가 없어서 상품 전체 재고로 대신함
+          available: fromJson ? !!p.available : !!v.available,
+          url: `${base}/products/${d.handle || p.handle}?variant=${v.id}`,
           image: abs(v.featured_image?.src, base) || img,
         });
       }
     } else {
+      // 옵션별 정보를 못 받음 → suggest 의 최저 옵션가만 알 수 있음. 정품으로 오인하지 않도록 partial 표시
+      const min = num(p.price_min ?? p.price);
+      const max = num(p.price_max ?? p.price);
       items.push({
         title: p.title, variant: '', vendor: p.vendor || '', type: p.type || '',
-        price: num(p.price), currency, available: !!p.available,
+        price: min, priceMax: max > min ? max : undefined, partial: true, currency, available: !!p.available,
         url: abs(String(p.url || `/products/${p.handle}`).split('?')[0], base),
         image: abs(p.image || p.featured_image?.url, base),
       });
@@ -107,22 +104,56 @@ async function shopify(store, q, ctx) {
   return items;
 }
 
-// ───────────────── WooCommerce ─────────────────
-async function woo(store, q, ctx) {
+const shopCurrency = new Map();
+async function shopifyCurrency(base, credentials) {
+  if (shopCurrency.has(base)) return shopCurrency.get(base);
+  let cur = null;
+  try {
+    const cart = await request(`${base}/cart.js`, 'json', { timeout: 8000, credentials });
+    cur = cart && cart.currency;
+  } catch { /* 무시 */ }
+  shopCurrency.set(base, cur);
+  return cur;
+}
+
+async function shopifyDetail(base, handle, credentials) {
+  try { return await request(`${base}/products/${handle}.js`, 'json', { timeout: 10000, credentials }); } catch { /* 재시도 */ }
+  await sleep(700);
+  try { return await request(`${base}/products/${handle}.json`, 'json', { timeout: 10000, credentials }); } catch { return null; }
+}
+
+async function shopify(store, q, ctx) {
   const base = `https://${store.domain}`;
-  const data = await request(`${base}/wp-json/wc/store/v1/products?search=${encodeURIComponent(q)}&per_page=24`, 'json');
-  if (!Array.isArray(data)) throw new Error('notwoo');
+  const url = `${base}/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=10&resources[options][unavailable_products]=last`;
+  const data = await request(url, 'json', { credentials: ctx.credentials });
+  const products = data?.resources?.results?.products;
+  if (!Array.isArray(products)) throw new Error('notshopify');
+  const currency = (await shopifyCurrency(base, ctx.credentials)) || ctx.regionCurrency;
+  // 차단을 피하려고 상세 요청은 동시에 2개까지만
+  const details = await mapLimit(products.slice(0, MAX_SHOPIFY_DETAIL), 2, p => shopifyDetail(base, p.handle, ctx.credentials));
+  return shopifyItems(base, products, details, currency);
+}
+
+// ───────────────── WooCommerce ─────────────────
+export function wooItems(data, regionCurrency) {
   return data.map(p => {
     const minor = Number(p.prices?.currency_minor_unit ?? 2);
     return {
       title: decodeHtml(p.name), variant: '', vendor: '', type: (p.categories || []).map(c => c.name).join(' '),
       price: Number(p.prices?.price) / Math.pow(10, minor),
-      currency: p.prices?.currency_code || ctx.regionCurrency,
+      currency: p.prices?.currency_code || regionCurrency,
       available: p.is_in_stock !== false,
       url: p.permalink,
       image: p.images?.[0]?.thumbnail || p.images?.[0]?.src || '',
     };
   });
+}
+
+async function woo(store, q, ctx) {
+  const base = `https://${store.domain}`;
+  const data = await request(`${base}/wp-json/wc/store/v1/products?search=${encodeURIComponent(q)}&per_page=24`, 'json', { credentials: ctx.credentials });
+  if (!Array.isArray(data)) throw new Error('notwoo');
+  return wooItems(data, ctx.regionCurrency);
 }
 
 function decodeHtml(s = '') {
@@ -209,8 +240,10 @@ function parseMicrodata(doc, base, ctx) {
 
 async function html(store, q, ctx) {
   const searchUrl = ctx.searchUrl.replace('{q}', encodeURIComponent(q));
-  const text = await request(searchUrl, 'text');
+  const text = await request(searchUrl, 'text', { credentials: ctx.credentials });
   const doc = new DOMParser().parseFromString(text, 'text/html');
+  // 정상 페이지에도 Cloudflare 스크립트가 들어 있을 수 있어서, 제목으로만 확인 페이지를 판별
+  if (CHALLENGE_TITLE.test(doc.title || '')) throw new Error('blocked');
   const base = searchUrl;
   let items = parseJsonLd(doc, base, ctx);
   if (!items.length) items = parseMicrodata(doc, base, ctx);
@@ -220,38 +253,43 @@ async function html(store, q, ctx) {
       .map(a => abs(a.getAttribute('href'), base).split('#')[0])
       .filter(h => re.test(h)))].slice(0, MAX_HTML_PRODUCT_PAGES);
     const pages = await mapLimit(links, 4, async link => {
-      const t = await request(link, 'text', 12000);
+      const t = await request(link, 'text', { timeout: 12000, credentials: ctx.credentials });
       const d = new DOMParser().parseFromString(t, 'text/html');
       const got = parseJsonLd(d, link, ctx);
       return got.length ? got : parseMicrodata(d, link, ctx);
     });
     items = pages.filter(Boolean).flat();
   }
-  if (!items.length && /cf-chl|challenge-platform|captcha|Access Denied/i.test(text)) throw new Error('blocked');
   return items;
 }
 
 const ADAPTERS = { shopify, woo, html };
 
-// mode: 'shopify' | 'woo' | 'html' | 'link'(직접 확인 필요)
-export async function searchStore(store, q, { detected, searchUrlOverride, regionCurrency }) {
+// mode: 'shopify' | 'woo' | 'html' | 'link'(데이터 없음, 직접 확인 필요) | 'error'
+// blocked: 봇 차단으로 판단되면 true
+export async function searchStore(store, q, { detected, searchUrlOverride, regionCurrency, credentials = 'omit' }) {
   const searchUrl = searchUrlOverride || defaultSearchUrl(store);
-  const ctx = { searchUrl, regionCurrency };
+  const ctx = { searchUrl, regionCurrency, credentials };
   let order;
   if (store.type === 'auto') order = detected ? [detected] : ['shopify', 'woo', 'html'];
   else order = [store.type];
 
   let lastErr = null;
+  let sawBlock = false;
   for (const mode of order) {
     try {
       const items = await ADAPTERS[mode](store, q, ctx);
       const clean = items.filter(i => i && i.title && Number.isFinite(i.price) && i.price > 0);
-      if (mode === 'html' && !clean.length) return { items: [], mode: 'link', detected: store.type === 'auto' ? 'html' : null };
+      if (mode === 'html' && !clean.length) return { items: [], mode: 'link', blocked: sawBlock, detected: null };
       return { items: clean, mode, detected: store.type === 'auto' ? mode : null };
     } catch (e) {
       lastErr = e;
+      if (isBlockedError(e.message)) sawBlock = true;
     }
   }
   // 저장된 판별 결과로 실패했으면 다음 번엔 다시 판별
-  return { items: [], mode: 'error', error: lastErr ? lastErr.message : 'unknown', detected: null, resetDetected: !!detected };
+  return {
+    items: [], mode: 'error', error: sawBlock ? 'blocked' : (lastErr ? lastErr.message : 'unknown'),
+    blocked: sawBlock, detected: null, resetDetected: !!detected,
+  };
 }

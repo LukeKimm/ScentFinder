@@ -4,6 +4,7 @@
 //       'woo'     → /wp-json/wc/store/v1/products
 //       'html'    → 검색 페이지의 구조화 데이터(JSON-LD 등) 파싱, 실패 시 "직접 확인" 링크
 // searchUrl: 사이트에서 직접 검색할 때 쓰는 주소 ({q} 자리에 검색어). 설정에서 수정 가능.
+// defaultOff: 처음엔 꺼진 상태 / tabOnly: 요청 없이 바로 숨은 탭으로 읽음
 // productPattern: html 방식에서 검색 결과의 상품 링크를 골라낼 정규식 (상품 페이지까지 들어가 가격을 읽음)
 
 // 지역 이름은 i18n.js의 region.* 문구 사용
@@ -18,7 +19,7 @@ export const REGIONS = {
 export const DEFAULT_STORES = [
   // ── 미국: 대형 할인몰 ──
   { id: 'fragrancenet', name: 'FragranceNet', domain: 'www.fragrancenet.com', region: 'US', type: 'html',
-    searchUrl: 'https://www.fragrancenet.com/search?q={q}',
+    searchUrl: 'https://www.fragrancenet.com/search/{q}',
     productPattern: '^https://www\\.fragrancenet\\.com/(cologne|perfume|fragrances)/[^/]+/[^/]+' },
   { id: 'fragrancex', name: 'FragranceX', domain: 'www.fragrancex.com', region: 'US', type: 'html',
     searchUrl: 'https://www.fragrancex.com/search/search_results?stext={q}',
@@ -26,7 +27,8 @@ export const DEFAULT_STORES = [
   { id: 'perfumecom', name: 'Perfume.com', domain: 'www.perfume.com', region: 'US', type: 'html',
     searchUrl: 'https://www.perfume.com/search/search_results?stext={q}',
     productPattern: '^https://www\\.perfume\\.com/[^/]+/[^/]+/(men-cologne|women-perfume|unisex)' },
-  { id: 'jomashop', name: 'Jomashop', domain: 'www.jomashop.com', region: 'US', type: 'html',
+  // 가격을 자바스크립트로 그려서 요청만으로는 못 읽음 → 바로 숨은 탭으로 읽기
+  { id: 'jomashop', name: 'Jomashop', domain: 'www.jomashop.com', region: 'US', type: 'html', tabOnly: true,
     searchUrl: 'https://www.jomashop.com/search?q={q}' },
   { id: 'maxaroma', name: 'MaxAroma', domain: 'www.maxaroma.com', region: 'US', type: 'auto',
     searchUrl: 'https://www.maxaroma.com/search?q={q}' },
@@ -56,8 +58,9 @@ export const DEFAULT_STORES = [
   { id: 'fragrancebuy', name: 'FragranceBuy', domain: 'fragrancebuy.ca', region: 'CA', type: 'auto' },
 
   // ── 영국 ──
-  { id: 'perfumeclick', name: 'Perfume Click', domain: 'www.perfumeclick.co.uk', region: 'UK', type: 'auto' },
-  { id: 'fragrancedirect', name: 'Fragrance Direct', domain: 'www.fragrancedirect.co.uk', region: 'UK', type: 'html',
+  { id: 'perfumeclick', name: 'Perfume Click', domain: 'www.perfume-click.co.uk', region: 'UK', type: 'auto' },
+  // 2026-10 기준 사이트 점검 중(자매몰 allbeauty로 안내) → 기본 꺼짐. 재오픈하면 설정에서 켜면 됨
+  { id: 'fragrancedirect', name: 'Fragrance Direct', domain: 'www.fragrancedirect.co.uk', region: 'UK', type: 'html', defaultOff: true,
     searchUrl: 'https://www.fragrancedirect.co.uk/search?q={q}' },
   { id: 'allbeauty', name: 'allbeauty', domain: 'www.allbeauty.com', region: 'UK', type: 'html',
     searchUrl: 'https://www.allbeauty.com/gb/en/search?q={q}' },

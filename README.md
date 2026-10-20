@@ -11,7 +11,9 @@ A Safari web extension (macOS + iOS) that searches 30 US, UK and Canadian fragra
 - 용량 선택, 원화 최저가·ml당 가격·사이트별 정렬
 - 자동 환율(open.er-api.com) 또는 직접 입력
 - 한국어 / English 화면 전환
-- 가격을 못 읽은 사이트는 버튼 하나로 검색 결과 탭 열기
+- 봇 차단·자바스크립트 렌더링 사이트는 숨은 탭으로 열어서 읽기 (Shopify는 용량별 가격까지)
+- 방문한 사이트의 쿠키 재사용 옵션
+- 그래도 못 읽은 사이트는 버튼 하나로 검색 결과 탭 열기
 
 ## 빠른 설치
 
@@ -36,6 +38,7 @@ Xcode가 열리면 4개 타깃의 **Signing & Capabilities › Team**을 지정�
 | `extension/manifest.json` | 확장 설정 (Manifest V3) |
 | `extension/stores.js` | 검색 대상 사이트 목록 |
 | `extension/adapters.js` | Shopify / WooCommerce / 페이지 분석 방식별 검색 |
+| `extension/tabs.js` | 막힌 사이트를 숨은 탭으로 열어 읽기 |
 | `extension/classify.js` | 용량·종류·관련도 판별 |
 | `extension/i18n.js`, `extension/_locales` | 한국어/영어 문구 |
 | `extension/app.*` | 검색 결과 화면 |

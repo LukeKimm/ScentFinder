@@ -107,3 +107,13 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
   .price { grid-column: 2; text-align: left; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .addRow { grid-template-columns: 1fr 1fr; }
 }
+
+/* 고급 설정 */
+.advRows { display: grid; gap: 10px; padding: 0 14px; }
+.advRow { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; font-size: 14px; }
+.advRow input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--accent); }
+/* 상태 칩 */
+.st.tab { color: var(--accent); }
+.st.tab::after { content: ' …'; }
+.st.blocked { color: var(--warn); text-decoration: underline; }
+.badge.partial { color: var(--warn); }
