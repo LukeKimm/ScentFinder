@@ -312,6 +312,9 @@ async function runSearch(query) {
       // 탭으로도 못 읽으면 처음 요청의 실패 이유(봇 차단 등)를 같이 보여줌
       if (res.mode !== 'tab' && fetchRes?.blocked) res.blocked = true;
       apply(store, res, true);
+      // 첫 요청이 왜 실패했는지 칩에 남겨둠 (마우스를 올리면 보임)
+      if (fetchRes) state.storeStatus[store.id].fetchError = fetchRes.mode === 'link' ? 'nodata' : (fetchRes.error || 'unknown');
+      renderStatus();
     }));
   };
 
@@ -438,14 +441,15 @@ function renderStatus() {
     const el = document.createElement(live ? 'span' : 'a');
     el.className = 'st ' + st.state;
     if (!live) { el.href = storeSearchLink(s); el.target = '_blank'; el.rel = 'noopener'; }
-    if (st.state === 'ok') el.textContent = `${s.name} ${st.count}${st.viaTab ? ' · ' + t('status.viaTab') : ''}`;
+    const fetchNote = st.fetchError ? t('status.fetchNote', { why: errShort(st.fetchError) }) : '';
+    if (st.state === 'ok') { el.textContent = `${s.name} ${st.count}${st.viaTab ? ' · ' + t('status.viaTab') : ''}`; el.title = fetchNote; }
     else if (st.state === 'tab') el.textContent = `${s.name} · ${t('status.tab')}`;
     else if (st.state === 'tabWait') el.textContent = `${s.name} · ${t('status.tabWait')}`;
     else if (st.state === 'stopped') { el.textContent = `${s.name} · ${t('status.stopped')}`; needCheck.push(s); }
     else if (st.state === 'blocked') { el.textContent = `${s.name} · ${t('status.blocked')}${st.skipped ? ' · ' + t('status.skipped') : ''}`; el.title = errText('blocked'); needCheck.push(s); }
-    else if (st.state === 'none') el.textContent = `${s.name} 0${st.viaTab ? ' · ' + t('status.viaTab') : ''}`;
+    else if (st.state === 'none') { el.textContent = `${s.name} 0${st.viaTab ? ' · ' + t('status.viaTab') : ''}`; el.title = fetchNote; }
     else if (st.state === 'link') { el.textContent = `${s.name} · ${t('status.check')}${st.skipped ? ' · ' + t('status.skipped') : ''}`; el.className = 'st link'; needCheck.push(s); }
-    else if (st.state === 'err') { el.textContent = `${s.name} · ${t('status.fail')} (${errShort(st.error)})${st.skipped ? ' · ' + t('status.skipped') : ''}`; el.title = errText(st.error); needCheck.push(s); }
+    else if (st.state === 'err') { el.textContent = `${s.name} · ${t('status.fail')} (${errShort(st.error)})${st.skipped ? ' · ' + t('status.skipped') : ''}`; el.title = [errText(st.error), fetchNote].filter(Boolean).join('\n'); needCheck.push(s); }
     else el.textContent = s.name;
     box.appendChild(el);
   }

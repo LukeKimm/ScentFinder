@@ -88,248 +88,262 @@ async function navigate(tabId, url) {
   await sleep(500);
 }
 
-// ── 페이지 안에서 실행되는 함수 (밖의 변수를 쓰면 안 됨) ──
-async function pageExtract(q, mode, attr) {
+// ── 페이지 안에서 실행되는 함수들 (밖의 변수를 쓰면 안 됨) ──
+// Safari 는 화면에 안 보이는 탭의 타이머(setTimeout)를 크게 늦춤.
+// 그래서 탭 안에서는 기다리지 않고(sleep 없음) 한 번만 읽고, 다시 읽기·기다리기는 검색 화면 쪽에서 함.
+
+// 1) 같은 출처 데이터 요청 (Shopify / WooCommerce). handles 를 주면 그 상품들의 용량별 정보만 요청.
+//    네트워크 요청은 백그라운드 탭에서도 늦어지지 않음. 결과는 DOM 속성으로 넘김
+async function pageApi(q, mode, attr, handles) {
   const root = document.documentElement;
   root.removeAttribute(attr);
   const done = o => root.setAttribute(attr, JSON.stringify(o));
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
   const getJSON = async u => {
     const r = await fetch(u, { credentials: 'include', headers: { Accept: 'application/json' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   };
+  const currency = async () => { try { return (await getJSON('/cart.js')).currency; } catch { return null; } };
   try {
-    const out = { url: location.href, title: document.title, kind: null, raw: null, items: [], links: [] };
-
-    if (mode !== 'dom') {
-      // Shopify (같은 출처 요청이라 봇 확인 쿠키가 붙음)
-      try {
-        const d = await getJSON(`/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=10&resources[options][unavailable_products]=last`);
-        const products = d && d.resources && d.resources.results && d.resources.results.products;
-        if (Array.isArray(products)) {
-          const details = [];
-          for (const p of products.slice(0, 8)) {
-            try { details.push(await getJSON(`/products/${p.handle}.js`)); } catch { details.push(null); }
-          }
-          let currency = null;
-          try { currency = (await getJSON('/cart.js')).currency; } catch { /* 무시 */ }
-          out.kind = 'shopify'; out.raw = { products, details, currency };
-          done(out); return;
-        }
-      } catch { /* Shopify 아님 */ }
-      // WooCommerce
-      try {
-        const d = await getJSON(`/wp-json/wc/store/v1/products?search=${encodeURIComponent(q)}&per_page=24`);
-        if (Array.isArray(d)) { out.kind = 'woo'; out.raw = d; done(out); return; }
-      } catch { /* WooCommerce 아님 */ }
-    }
-
-    // ── 화면에서 읽기 ──
-    const PRICE = /(US\$|CA\$|C\$|A\$|\$|£|€|GBP|USD|EUR|CAD)\s?(\d{1,3}(?:[,.\s]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)/;
-    const OLD = /\b(was|old|compare|compare-at|strike|original|rrp|msrp|list-?price)\b/i;
-    const SOLD = /(out of stock|sold out|notify me|join waiting list|unavailable|email when available)/i;
-    const text = el => (el && (el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim();
-
-    const fromLd = () => {
-      const items = [];
-      const walk = (n, f) => {
-        if (!n || typeof n !== 'object') return;
-        if (Array.isArray(n)) { n.forEach(x => walk(x, f)); return; }
-        f(n);
-        ['@graph', 'itemListElement', 'item', 'mainEntity', 'hasVariant', 'isVariantOf'].forEach(k => n[k] && walk(n[k], f));
-      };
-      const isProduct = n => { const t = n['@type']; return Array.isArray(t) ? t.includes('Product') : t === 'Product'; };
-      // 구조화 데이터에 용량 이름이 없을 때(예: FragranceX) 화면에서 가격 바로 위 줄을 용량 이름으로 씀
-      const raw = document.body ? document.body.innerText : '';
-      const labelFor = price => {
-        const v = Number(price);
-        if (!(v > 0)) return '';
-        const p = v.toFixed(2).replace('.', '\\.');
-        const m = raw.match(new RegExp('([^\\n]{2,80})\\n+[^\\n\\d]{0,4}' + p + '(?!\\d)'));
-        return m ? m[1].trim() : '';
-      };
-      document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
-        let j; try { j = JSON.parse(s.textContent); } catch { return; }
-        walk(j, n => {
-          if (!isProduct(n) || !n.offers) return;
-          const offers = [].concat(n.offers).flatMap(o => (o && Array.isArray(o.offers)) ? o.offers : [o]);
-          const img = Array.isArray(n.image) ? (n.image[0] && (n.image[0].url || n.image[0])) : (n.image && (n.image.url || n.image));
-          for (const o of offers) {
-            if (!o) continue;
-            const price = String(o.price ?? o.lowPrice ?? (o.priceSpecification && o.priceSpecification.price) ?? '');
-            if (!price) continue;
-            items.push({
-              title: n.name || '',
-              variant: (o.name && o.name !== n.name) ? o.name : ((offers.length > 1 && labelFor(price)) || n.size || ''),
-              vendor: typeof n.brand === 'string' ? n.brand : ((n.brand && n.brand.name) || ''),
-              price, currency: o.priceCurrency || '', symbol: '',
-              available: o.availability ? /InStock|LimitedAvailability|OnlineOnly|PreOrder/i.test(String(o.availability)) : true,
-              url: o.url || n.url || location.href, image: typeof img === 'string' ? img : '',
-            });
-          }
-        });
-      });
-      return items;
-    };
-
-    const fromCards = () => {
-      const items = [];
-      const seen = new Set();
-      const priceEls = new Set(document.querySelectorAll('[itemprop="price"], [data-price], [class*="price" i], [class*="Price"]'));
-      if (priceEls.size < 2) {
-        // 가격 클래스가 없는 사이트: 가격 문자열이 있는 말단 요소를 찾음
-        const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        let node, n = 0;
-        while ((node = w.nextNode()) && n < 600) {
-          if (PRICE.test(node.nodeValue) && node.parentElement) { priceEls.add(node.parentElement); n++; }
-        }
-      }
-      const byUrl = new Map();
-      for (const el of priceEls) {
-        if (el.closest('del, s, strike, header, footer, nav')) continue;
-        if (OLD.test((el.className && String(el.className)) || '')) continue;
-        if (!PRICE.test(text(el))) continue;
-        // 상품 카드 범위: 위로 올라가며 링크가 3개 이하인 가장 큰 상자
-        let card = el, best = null;
-        for (let i = 0; i < 8 && card && card !== document.body; i++) {
-          const hrefs = new Set([...card.querySelectorAll('a[href]')].map(a => a.href.split('#')[0]).filter(h => h && !h.startsWith('javascript')));
-          const len = text(card).length;
-          if (hrefs.size >= 1 && hrefs.size <= 3 && len < 700) best = card;
-          if (hrefs.size > 3 || len >= 700) break;
-          card = card.parentElement;
-        }
-        if (!best) continue;
-        const links = [...best.querySelectorAll('a[href]')];
-        const link = links.sort((a, b) => text(b).length - text(a).length)[0];
-        if (!link) continue;
-        const url = link.href.split('#')[0];
-        if (byUrl.has(url) || seen.has(best)) continue;
-        seen.add(best);
-        const head = best.querySelector('h1,h2,h3,h4,[class*="title" i],[class*="name" i]');
-        const img = best.querySelector('img');
-        const title = (text(head) || text(link) || (img && img.alt) || '').slice(0, 200);
-        if (!title) continue;
-        // 카드 안의 가격 중 정가(취소선)·할인액·배송 조건을 빼고 가장 낮은 값 = 판매가
-        // 정가 표시(취소선, old/was/compare 클래스)는 빼고 읽음. Shopify 의 "regular" 는 정상가라서 빼지 않음
-        const STRUCK_CLASS = /(^|[-_\s])(old|was|compare|compare-at|original|rrp|msrp|strike|crossed)([-_\s]|$)/i;
-        const struck = new Set([...best.querySelectorAll('del, s, strike, [class]')]
-          .filter(e => /^(DEL|S|STRIKE)$/.test(e.tagName) || STRUCK_CLASS.test(String(e.className)))
-          .map(text).filter(Boolean));
-        const readPrices = body => {
-          const out = [];
-          const re = new RegExp(PRICE.source, 'g');
-          let m;
-          while ((m = re.exec(body))) {
-            const before = body.slice(Math.max(0, m.index - 12), m.index).toLowerCase();
-            const after = body.slice(m.index + m[0].length, m.index + m[0].length + 6).toLowerCase();
-            if (/(save|over|under|spend|orders?)\s*$/.test(before) || /^\s*off/.test(after)) continue;
-            const v = parseFloat(String(m[2]).replace(/\s/g, '').replace(/,(\d{1,2})$/, '.$1').replace(/,/g, ''));
-            if (v > 0) out.push({ v, raw: m[2], sym: m[1] });
-          }
-          return out;
-        };
-        let body = text(best);
-        for (const st of struck) body = body.split(st).join(' ');
-        let prices = readPrices(body);
-        if (!prices.length) prices = readPrices(text(best));
-        if (!prices.length) continue;
-        prices.sort((a, b) => a.v - b.v);
-        const full = text(best);
-        byUrl.set(url, {
-          title, variant: full.replace(title, '').slice(0, 200), vendor: '',
-          price: prices[0].raw, symbol: prices[0].sym, currency: '',
-          available: !SOLD.test(full), url,
-          image: img ? (img.currentSrc || img.src || img.getAttribute('data-src') || '') : '',
-          // 목록 카드 가격은 여러 용량 중 최저가일 수 있음 ("From $..", "2 sizes available", Shopify 카드 등)
-          partial: mode !== 'dom' || /\b(from|starting at)\b|sizes? available|more sizes|options available/i.test(full),
-        });
-        if (byUrl.size >= 60) break;
-      }
-      items.push(...byUrl.values());
-      return items;
-    };
-
-    // 자바스크립트로 늦게 그려지는 사이트를 위해 최대 10초 다시 시도.
-    // 배너 가격(예: 구독 $6.95)만 잡히고 끝나지 않도록, 검색어 단어가 들어간 상품이 나올 때까지 기다림
-    const qWords = q.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    const hit = it => qWords.some(w => `${it.title} ${it.variant}`.toLowerCase().includes(w));
-    const NO_RESULTS = /no results|(^|[^\d.,])0 results|no products (were )?found|nothing (was )?found|did ?n.t match any|we couldn.t find|sorry, no/i;
-    for (let i = 0; i < 10; i++) {
-      out.items = fromLd();
-      if (!out.items.length) out.items = fromCards();
-      if (out.items.some(hit)) break;
-      if (i >= 1 && NO_RESULTS.test(text(document.querySelector('main') || document.body).slice(0, 4000))) { out.noResults = true; break; }
-      if (i >= 3 && document.querySelectorAll('a[href]').length > 0 && [...document.querySelectorAll('a[href]')].some(a => qWords.every(w => text(a.parentElement).toLowerCase().includes(w)))) break;
-      await sleep(1000);
-    }
-    out.title = document.title;
-    // 상품 링크: 링크 글자만으로는 브랜드가 빠지는 경우가 많아서(예: "Aventus" by Creed) 카드 전체 글자를 함께 씀
-    const ctxText = a => {
-      let el = a;
-      for (let i = 0; i < 4 && el.parentElement; i++) {
-        const p = el.parentElement;
-        if (text(p).length > 300 || p.querySelectorAll('a[href]').length > 4) break;
-        el = p;
-      }
-      return text(el).slice(0, 200);
-    };
-    const linkMap = new Map();
-    for (const a of document.querySelectorAll('a[href]')) {
-      const href = a.href.split('#')[0];
-      if (!href.startsWith(location.origin) || /\/search|[?&](q|f|query|search|text|stext|sort|page)=/i.test(href.slice(location.origin.length))) continue;
-      const tx = ctxText(a) || a.title || '';
-      if (!tx) continue;
-      if (!linkMap.has(href) || linkMap.get(href).length < tx.length) linkMap.set(href, tx);
-      if (linkMap.size >= 400) break;
-    }
-    out.links = [...linkMap].map(([href, t]) => ({ href, text: t }));
-    out.kind = 'dom';
-
-    // Shopify 몰은 검색 JSON 이 막혀도 상품별 /products/{handle}.js 는 열려 있는 경우가 많음.
-    // 카드의 "최저 옵션가"(샘플 가격일 수 있음) 대신 용량별 실제 가격으로 바꿈
-    if (mode !== 'dom') {
-      const handleOf = u => { const m = String(u).match(/\/products\/([^/?#]+)/); return m ? m[1] : null; };
-      const ordered = [...out.items].sort((a, b) => (hit(b) ? 1 : 0) - (hit(a) ? 1 : 0));
-      const handles = [...new Set(ordered.map(i => handleOf(i.url)).filter(Boolean))].slice(0, 8);
-      const products = [], details = [], got = new Set();
-      for (const h of handles) {
+    if (handles && handles.length) {
+      const products = [], details = [];
+      await Promise.all(handles.map(async h => {
         try {
           const d = await getJSON(`/products/${h}.js`);
-          if (!d || !Array.isArray(d.variants)) continue;
-          products.push({ handle: h, title: d.title, vendor: d.vendor, type: d.type, available: d.available, url: `/products/${h}`, image: d.featured_image });
-          details.push(d);
-          got.add(h);
+          if (d && Array.isArray(d.variants)) {
+            products.push({ handle: h, title: d.title, vendor: d.vendor, type: d.type, available: d.available, url: `/products/${h}`, image: d.featured_image });
+            details.push(d);
+          }
         } catch { /* 이 상품은 화면 가격 그대로 */ }
-      }
-      if (products.length) {
-        let currency = null;
-        try { currency = (await getJSON('/cart.js')).currency; } catch { /* 무시 */ }
-        out.kind = 'shopify';
-        out.raw = { products, details, currency };
-        out.items = out.items.filter(i => !got.has(handleOf(i.url)));  // 나머지는 화면 가격으로
-      }
+      }));
+      done(products.length ? { kind: 'shopify', raw: { products, details, currency: await currency() } } : { kind: null });
+      return;
     }
-    done(out);
+    try {
+      const d = await getJSON(`/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=10&resources[options][unavailable_products]=last`);
+      const products = d && d.resources && d.resources.results && d.resources.results.products;
+      if (Array.isArray(products)) {
+        const details = await Promise.all(products.slice(0, 8).map(p => getJSON(`/products/${p.handle}.js`).catch(() => null)));
+        done({ kind: 'shopify', raw: { products, details, currency: await currency() } });
+        return;
+      }
+    } catch { /* Shopify 아님 */ }
+    try {
+      const d = await getJSON(`/wp-json/wc/store/v1/products?search=${encodeURIComponent(q)}&per_page=24`);
+      if (Array.isArray(d)) { done({ kind: 'woo', raw: d }); return; }
+    } catch { /* WooCommerce 아님 */ }
+    done({ kind: null });
   } catch (e) {
-    done({ error: String(e && e.message || e) });
+    done({ kind: null, error: String(e && e.message || e) });
   }
 }
 
-async function runExtract(tabId, q, mode, deadline, signal) {
-  // executeScript 가 비동기 함수의 결과를 돌려주지 않는 Safari 버전도 있어서, 결과는 DOM 속성으로 받음
-  let injectErr = false;
-  await Promise.race([exec(tabId, pageExtract, [q, mode, RESULT_ATTR]).catch(() => { injectErr = true; }), sleep(1500)]);
-  // 주입 오류가 나도 함수가 이미 실행됐을 수 있어서 결과는 잠시 더 확인
-  if (injectErr) deadline = Math.min(deadline, Date.now() + 5000);
+// 2) 화면 읽기 (동기 함수 — 기다리지 않고 지금 그려진 것만 읽어서 바로 돌려줌)
+function pageScan(q, mode) {
+  const PRICE = /(US\$|CA\$|C\$|A\$|\$|£|€|GBP|USD|EUR|CAD)\s?(\d{1,3}(?:[,.\s]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)/;
+  const OLD = /\b(was|old|compare|compare-at|strike|original|rrp|msrp|list-?price)\b/i;
+  const SOLD = /(out of stock|sold out|notify me|join waiting list|unavailable|email when available)/i;
+  const NO_RESULTS = /no results|(^|[^\d.,])0 results|no products (were )?found|nothing (was )?found|did ?n.t match any|we couldn.t find|sorry, no/i;
+  const text = el => (el && (el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim();
+  const out = { url: location.href, title: document.title, items: [], links: [], noResults: false };
+  if (!document.body) return out;
+
+  // 구조화 데이터 (JSON-LD)
+  const raw = document.body.innerText || '';
+  const labelFor = price => {
+    const v = Number(price);
+    if (!(v > 0)) return '';
+    const p = v.toFixed(2).replace('.', '\\.');
+    const m = raw.match(new RegExp('([^\\n]{2,80})\\n+[^\\n\\d]{0,4}' + p + '(?!\\d)'));
+    return m ? m[1].trim() : '';
+  };
+  const walk = (n, f) => {
+    if (!n || typeof n !== 'object') return;
+    if (Array.isArray(n)) { n.forEach(x => walk(x, f)); return; }
+    f(n);
+    ['@graph', 'itemListElement', 'item', 'mainEntity', 'hasVariant', 'isVariantOf'].forEach(k => n[k] && walk(n[k], f));
+  };
+  const isProduct = n => { const t = n['@type']; return Array.isArray(t) ? t.includes('Product') : t === 'Product'; };
+  document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+    let j; try { j = JSON.parse(s.textContent); } catch { return; }
+    walk(j, n => {
+      if (!isProduct(n) || !n.offers) return;
+      const offers = [].concat(n.offers).flatMap(o => (o && Array.isArray(o.offers)) ? o.offers : [o]);
+      const img = Array.isArray(n.image) ? (n.image[0] && (n.image[0].url || n.image[0])) : (n.image && (n.image.url || n.image));
+      for (const o of offers) {
+        if (!o) continue;
+        const price = String(o.price ?? o.lowPrice ?? (o.priceSpecification && o.priceSpecification.price) ?? '');
+        if (!price) continue;
+        out.items.push({
+          title: n.name || '',
+          variant: (o.name && o.name !== n.name) ? o.name : ((offers.length > 1 && labelFor(price)) || n.size || ''),
+          vendor: typeof n.brand === 'string' ? n.brand : ((n.brand && n.brand.name) || ''),
+          price, currency: o.priceCurrency || '', symbol: '',
+          available: o.availability ? /InStock|LimitedAvailability|OnlineOnly|PreOrder/i.test(String(o.availability)) : true,
+          url: o.url || n.url || location.href, image: typeof img === 'string' ? img : '',
+        });
+      }
+    });
+  });
+
+  // 상품 카드
+  if (!out.items.length) {
+    const seen = new Set();
+    const priceEls = new Set(document.querySelectorAll('[itemprop="price"], [data-price], [class*="price" i], [class*="Price"]'));
+    if (priceEls.size < 2) {
+      const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node, n = 0;
+      while ((node = w.nextNode()) && n < 600) {
+        if (PRICE.test(node.nodeValue) && node.parentElement) { priceEls.add(node.parentElement); n++; }
+      }
+    }
+    const STRUCK_CLASS = /(^|[-_\s])(old|was|compare|compare-at|original|rrp|msrp|strike|crossed)([-_\s]|$)/i;
+    const readPrices = body => {
+      const res = [];
+      const re = new RegExp(PRICE.source, 'g');
+      let m;
+      while ((m = re.exec(body))) {
+        const before = body.slice(Math.max(0, m.index - 12), m.index).toLowerCase();
+        const after = body.slice(m.index + m[0].length, m.index + m[0].length + 6).toLowerCase();
+        if (/(save|over|under|spend|orders?)\s*$/.test(before) || /^\s*off/.test(after)) continue;
+        const v = parseFloat(String(m[2]).replace(/\s/g, '').replace(/,(\d{1,2})$/, '.$1').replace(/,/g, ''));
+        if (v > 0) res.push({ v, raw: m[2], sym: m[1] });
+      }
+      return res;
+    };
+    const byUrl = new Map();
+    for (const el of priceEls) {
+      if (el.closest('del, s, strike, header, footer, nav')) continue;
+      if (OLD.test((el.className && String(el.className)) || '')) continue;
+      if (!PRICE.test(text(el))) continue;
+      // 상품 카드 범위: 위로 올라가며 링크가 3개 이하인 가장 큰 상자
+      let card = el, best = null;
+      for (let i = 0; i < 8 && card && card !== document.body; i++) {
+        const hrefs = new Set([...card.querySelectorAll('a[href]')].map(a => a.href.split('#')[0]).filter(h => h && !h.startsWith('javascript')));
+        const len = text(card).length;
+        if (hrefs.size >= 1 && hrefs.size <= 3 && len < 700) best = card;
+        if (hrefs.size > 3 || len >= 700) break;
+        card = card.parentElement;
+      }
+      if (!best) continue;
+      const link = [...best.querySelectorAll('a[href]')].sort((a, b) => text(b).length - text(a).length)[0];
+      if (!link) continue;
+      const url = link.href.split('#')[0];
+      if (byUrl.has(url) || seen.has(best)) continue;
+      seen.add(best);
+      const head = best.querySelector('h1,h2,h3,h4,[class*="title" i],[class*="name" i]');
+      const img = best.querySelector('img');
+      const title = (text(head) || text(link) || (img && img.alt) || '').slice(0, 200);
+      if (!title) continue;
+      // 정가 표시(취소선, old/was/compare 클래스)는 빼고 가장 낮은 값 = 판매가. Shopify 의 "regular" 는 정상가라서 빼지 않음
+      const struck = new Set([...best.querySelectorAll('del, s, strike, [class]')]
+        .filter(e => /^(DEL|S|STRIKE)$/.test(e.tagName) || STRUCK_CLASS.test(String(e.className)))
+        .map(text).filter(Boolean));
+      let body = text(best);
+      for (const st of struck) body = body.split(st).join(' ');
+      let prices = readPrices(body);
+      if (!prices.length) prices = readPrices(text(best));
+      if (!prices.length) continue;
+      prices.sort((a, b) => a.v - b.v);
+      const full = text(best);
+      byUrl.set(url, {
+        title, variant: full.replace(title, '').slice(0, 200), vendor: '',
+        price: prices[0].raw, symbol: prices[0].sym, currency: '',
+        available: !SOLD.test(full), url,
+        image: img ? (img.currentSrc || img.src || img.getAttribute('data-src') || '') : '',
+        // 목록 카드 가격은 여러 용량 중 최저가일 수 있음 ("From $..", "2 sizes available", Shopify 카드 등)
+        partial: mode !== 'dom' || /\b(from|starting at)\b|sizes? available|more sizes|options available/i.test(full),
+      });
+      if (byUrl.size >= 60) break;
+    }
+    out.items = [...byUrl.values()];
+  }
+
+  out.noResults = NO_RESULTS.test(text(document.querySelector('main') || document.body).slice(0, 4000));
+
+  // 상품 링크: 링크 글자만으로는 브랜드가 빠지는 경우가 많아서(예: "Aventus" by Creed) 카드 전체 글자를 함께 씀
+  const ctxText = a => {
+    let el = a;
+    for (let i = 0; i < 4 && el.parentElement; i++) {
+      const p = el.parentElement;
+      if (text(p).length > 300 || p.querySelectorAll('a[href]').length > 4) break;
+      el = p;
+    }
+    return text(el).slice(0, 200);
+  };
+  const linkMap = new Map();
+  for (const a of document.querySelectorAll('a[href]')) {
+    const href = a.href.split('#')[0];
+    if (!href.startsWith(location.origin) || /\/search|[?&](q|f|query|search|text|stext|sort|page)=/i.test(href.slice(location.origin.length))) continue;
+    const tx = ctxText(a) || a.title || '';
+    if (!tx) continue;
+    if (!linkMap.has(href) || linkMap.get(href).length < tx.length) linkMap.set(href, tx);
+    if (linkMap.size >= 400) break;
+  }
+  out.links = [...linkMap].map(([href, t]) => ({ href, text: t }));
+  return out;
+}
+
+// pageApi 실행 후 결과 속성을 기다림 (기다리는 쪽은 검색 화면이라 타이머가 늦어지지 않음)
+async function runApi(tabId, q, mode, handles, deadline, signal) {
+  await Promise.race([exec(tabId, pageApi, [q, mode, RESULT_ATTR, handles || null]).catch(() => {}), sleep(300)]);
   while (Date.now() < deadline) {
     checkStop(signal);
-    let raw;
-    try { raw = await exec(tabId, a => document.documentElement.getAttribute(a), [RESULT_ATTR]); } catch { raw = null; }
-    if (raw) { try { return JSON.parse(raw); } catch { return { error: 'parse' }; } }
-    await sleep(700);
+    let raw = null;
+    try { raw = await exec(tabId, a => document.documentElement.getAttribute(a), [RESULT_ATTR]); } catch { /* 이동 중 */ }
+    if (raw) { try { return JSON.parse(raw); } catch { return { kind: null }; } }
+    await sleep(400);
   }
-  return { error: 'tabTimeout' };
+  return { kind: null, error: 'tabTimeout' };
+}
+
+// 화면을 여러 번 다시 읽으며 상품이 그려지길 기다림
+async function runExtract(tabId, q, mode, deadline, signal) {
+  const qWords = q.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+  const hit = it => qWords.some(w => `${it.title} ${it.variant}`.toLowerCase().includes(w));
+
+  if (mode !== 'dom') {
+    const api = await runApi(tabId, q, mode, null, Math.min(deadline, Date.now() + 10000), signal);
+    if (api.kind === 'shopify' || api.kind === 'woo') return { url: await tabUrl(tabId), ...api, items: [], links: [] };
+  }
+
+  let out = null, tries = 0;
+  while (Date.now() < deadline) {
+    checkStop(signal);
+    try { out = await exec(tabId, pageScan, [q, mode]); } catch { out = out || null; }
+    tries++;
+    if (out) {
+      if (out.items.some(hit)) break;
+      if (out.noResults && tries >= 2) break;
+      // 가격 없이 상품 링크만 있는 목록(FragranceNet, FragranceX)은 링크가 보이면 진행
+      if (tries >= 3 && out.links.some(l => qWords.every(w => l.text.toLowerCase().includes(w)))) break;
+    }
+    await sleep(800);
+  }
+  if (!out) return { error: 'tabTimeout' };
+  out.kind = 'dom';
+
+  // Shopify 몰은 검색 JSON 이 막혀도 상품별 /products/{handle}.js 는 열려 있는 경우가 많음.
+  // 카드의 "최저 옵션가"(샘플 가격일 수 있음) 대신 용량별 실제 가격으로 바꿈
+  if (mode !== 'dom' && out.items.length) {
+    const handleOf = u => { const m = String(u).match(/\/products\/([^/?#]+)/); return m ? m[1] : null; };
+    const ordered = [...out.items].sort((a, b) => (hit(b) ? 1 : 0) - (hit(a) ? 1 : 0));
+    const handles = [...new Set(ordered.map(i => handleOf(i.url)).filter(Boolean))].slice(0, 8);
+    if (handles.length) {
+      const api = await runApi(tabId, q, mode, handles, Date.now() + 10000, signal);
+      if (api.kind === 'shopify') {
+        const got = new Set(api.raw.products.map(p => p.handle));
+        out.kind = 'shopify';
+        out.raw = api.raw;
+        out.items = out.items.filter(i => !got.has(handleOf(i.url)));  // 나머지는 화면 가격으로
+      }
+    }
+  }
+  return out;
+}
+
+async function tabUrl(tabId) {
+  try { return await exec(tabId, () => location.href); } catch { return ''; }
 }
 
 // 가격 문자열 → 숫자 ("1.234,56" 과 "1,234.56" 둘 다)
@@ -354,8 +368,9 @@ function domItems(out, regionCurrency) {
   })).filter(i => i.title && i.price > 0);
 }
 
-function toItems(out, regionCurrency) {
-  const base = new URL(out.url).origin;
+function toItems(out, regionCurrency, fallbackBase) {
+  let base = fallbackBase;
+  try { base = new URL(out.url).origin; } catch { /* 주소를 못 읽으면 사이트 기본 주소 */ }
   if (out.kind === 'shopify') {
     return [
       ...shopifyItems(base, out.raw.products, out.raw.details, out.raw.currency || regionCurrency),
@@ -390,7 +405,7 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
     const out = await runExtract(tab.id, q, mode, Date.now() + EXTRACT_TIMEOUT, signal);
     if (out.noResults && !(out.items || []).length) return { items: [], mode: 'tab' };
     if (out.error) return { items: [], mode: 'error', error: out.error };
-    let items = toItems(out, regionCurrency);
+    let items = toItems(out, regionCurrency, `https://${store.domain}`);
 
     // 검색 결과에 관련 상품 가격이 없으면 관련 상품 페이지를 직접 열어봄
     // (관련 상품이 없거나, 있어도 "최저 옵션가"뿐이면 상품 페이지에서 용량별 가격을 확인)
