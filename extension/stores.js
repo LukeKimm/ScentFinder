@@ -45,8 +45,9 @@ export const DEFAULT_STORES = [
   { id: 'olfactory', name: 'Olfactory Factory', domain: 'www.olfactoryfactoryllc.com', region: 'US', type: 'auto' },
   { id: 'arvella', name: 'Arvella', domain: 'arvellafragrance.com', region: 'US', type: 'auto' },
   { id: 'ministry', name: 'Ministry of Scent', domain: 'ministryofscent.com', region: 'US', type: 'auto' },
-  { id: 'luckyscent', name: 'Luckyscent', domain: 'www.luckyscent.com', region: 'US', type: 'auto',
-    searchUrl: 'https://www.luckyscent.com/search?q={q}' },
+  // ?q= 는 무시되고 아무 상품이나 나옴 → ?term= 이 실제 검색어 (2026-10 확인)
+  { id: 'luckyscent', name: 'Luckyscent', domain: 'www.luckyscent.com', region: 'US', type: 'html',
+    searchUrl: 'https://www.luckyscent.com/search?term={q}' },
   { id: 'bestbrands', name: 'Best Brands Perfume', domain: 'bestbrandsperfume.com', region: 'US', type: 'auto',
     searchUrl: 'https://bestbrandsperfume.com/?s={q}&post_type=product' },
   { id: 'fragranceoutlet', name: 'Fragrance Outlet', domain: 'www.fragranceoutlet.com', region: 'US', type: 'auto' },
@@ -62,15 +63,15 @@ export const DEFAULT_STORES = [
   // 2026-10 기준 사이트 점검 중(자매몰 allbeauty로 안내) → 기본 꺼짐. 재오픈하면 설정에서 켜면 됨
   { id: 'fragrancedirect', name: 'Fragrance Direct', domain: 'www.fragrancedirect.co.uk', region: 'UK', type: 'html', defaultOff: true,
     searchUrl: 'https://www.fragrancedirect.co.uk/search?q={q}' },
-  { id: 'allbeauty', name: 'allbeauty', domain: 'www.allbeauty.com', region: 'UK', type: 'html',
-    searchUrl: 'https://www.allbeauty.com/gb/en/search?q={q}' },
+  // 2026-10 Shopify 로 바뀜 (예전 /gb/en/search 주소는 404)
+  { id: 'allbeauty', name: 'allbeauty', domain: 'allbeauty.com', region: 'UK', type: 'shopify' },
   { id: 'notino', name: 'Notino UK', domain: 'www.notino.co.uk', region: 'UK', type: 'html',
     searchUrl: 'https://www.notino.co.uk/search.asp?exps={q}' },
   { id: 'escentual', name: 'Escentual', domain: 'www.escentual.com', region: 'UK', type: 'html',
     searchUrl: 'https://www.escentual.com/search/?q={q}' },
   { id: 'fragranceshopuk', name: 'The Fragrance Shop', domain: 'www.thefragranceshop.co.uk', region: 'UK', type: 'auto' },
   { id: 'perfumeshopuk', name: 'The Perfume Shop', domain: 'www.theperfumeshop.com', region: 'UK', type: 'html',
-    searchUrl: 'https://www.theperfumeshop.com/search?text={q}' },
+    searchUrl: 'https://www.theperfumeshop.com/search?query={q}' },  // ?text= 는 빈 결과
 ];
 
 export function defaultSearchUrl(store) {

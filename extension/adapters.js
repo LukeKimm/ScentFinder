@@ -2,6 +2,7 @@
 // 결과 형식: { title, variant, vendor, type, price, priceMax?, partial?, currency, available, url, image }
 
 import { defaultSearchUrl } from './stores.js';
+import { relevance } from './classify.js';
 
 const TIMEOUT_MS = 15000;
 const MAX_SHOPIFY_DETAIL = 8;
@@ -249,9 +250,15 @@ async function html(store, q, ctx) {
   if (!items.length) items = parseMicrodata(doc, base, ctx);
   if (!items.length && store.productPattern) {
     const re = new RegExp(store.productPattern);
-    const links = [...new Set([...doc.querySelectorAll('a[href]')]
-      .map(a => abs(a.getAttribute('href'), base).split('#')[0])
-      .filter(h => re.test(h)))].slice(0, MAX_HTML_PRODUCT_PAGES);
+    // 검색어와 관련 있는 상품 링크만 열어봄 (링크 글자에 브랜드가 빠지는 경우가 많아서 주변 글자까지 함께 봄)
+    const ctx = a => [a.textContent, a.parentElement?.textContent, a.parentElement?.parentElement?.textContent]
+      .map(t => (t || '').replace(/\s+/g, ' ').trim()).find(t => t.length > 3 && t.length < 300) || '';
+    const productLinks = [...doc.querySelectorAll('a[href]')]
+      .map(a => ({ href: abs(a.getAttribute('href'), base).split('#')[0], text: ctx(a) }))
+      .filter(l => re.test(l.href));
+    const links = [...new Set(productLinks.filter(l => relevance(q, l.text) >= 0.75).map(l => l.href))].slice(0, MAX_HTML_PRODUCT_PAGES);
+    // 상품 목록은 나왔는데 관련 상품이 없으면 = 이 사이트엔 없음 (직접 확인할 필요 없음)
+    if (!links.length && productLinks.length) { const none = []; none.searched = true; return none; }
     const pages = await mapLimit(links, 4, async link => {
       const t = await request(link, 'text', { timeout: 12000, credentials: ctx.credentials });
       const d = new DOMParser().parseFromString(t, 'text/html');
@@ -290,7 +297,7 @@ export async function searchStore(store, q, { detected, searchUrlOverride, regio
     try {
       const items = await run(mode);
       const clean = items.filter(i => i && i.title && Number.isFinite(i.price) && i.price > 0);
-      if (mode === 'html' && !clean.length) return { items: [], mode: 'link', blocked: sawBlock, detected: null };
+      if (mode === 'html' && !clean.length && !items.searched) return { items: [], mode: 'link', blocked: sawBlock, detected: null };
       return { items: clean, mode, detected: store.type === 'auto' ? mode : null };
     } catch (e) {
       lastErr = e;

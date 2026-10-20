@@ -1,6 +1,6 @@
 import { DEFAULT_STORES, REGIONS, defaultSearchUrl } from './stores.js';
 import { searchStore } from './adapters.js';
-import { searchViaTab, tabsSupported, cleanupTabs } from './tabs.js';
+import { searchViaTab, tabsSupported, cleanupTabs, snapshotTabs } from './tabs.js';
 import { CATEGORIES, classify, extractSize, extractConcentration, relevance, isNonFragrance } from './classify.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
 
@@ -279,6 +279,7 @@ async function runSearch(query) {
 
   const signal = state.abort;
   const useTabs = state.opts.tabs && tabsSupported();
+  if (useTabs) await snapshotTabs();
   const tabJobs = [];
   const runTab = limiter(TAB_CONCURRENCY);
 

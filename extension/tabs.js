@@ -27,13 +27,20 @@ const openTabs = new Set();
 const openedUrls = new Set(); // Safari 가 "페이지 열기 실패" 화면으로 바꾸면 탭 id 로 못 닫는 경우가 있어서 주소로도 정리
 addEventListener('pagehide', () => { for (const id of openTabs) { try { api.tabs.remove(id); } catch { /* 무시 */ } } });
 
-// 검색이 끝난 뒤 남아 있는 숨은 탭을 모두 닫음
+// 검색 시작 때 이미 열려 있던 탭(사용자가 연 탭)은 정리 대상에서 빼기 위해 기억
+const userTabs = new Set();
+export async function snapshotTabs() {
+  userTabs.clear();
+  try { for (const t of await api.tabs.query({})) userTabs.add(t.id); } catch { /* 무시 */ }
+}
+
+// 검색이 끝난 뒤 남아 있는 숨은 탭을 모두 닫음 (사용자가 직접 연 탭은 주소가 같아도 건드리지 않음)
 export async function cleanupTabs() {
   for (const id of openTabs) { try { await api.tabs.remove(id); } catch { /* 이미 닫힘 */ } }
   openTabs.clear();
   try {
     const all = await api.tabs.query({});
-    const ids = all.filter(t => !t.active && t.url && openedUrls.has(t.url)).map(t => t.id);
+    const ids = all.filter(t => !t.active && !userTabs.has(t.id) && t.url && openedUrls.has(t.url)).map(t => t.id);
     if (ids.length) await api.tabs.remove(ids);
   } catch { /* 무시 */ }
   openedUrls.clear();
@@ -437,7 +444,12 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
         items.push(...got);
       }
     }
-    return { items, mode: items.length ? 'tab' : 'link' };
+    if (items.length) return { items, mode: 'tab' };
+    // 검색 결과 페이지가 정상으로 떴는데(상품·브랜드 링크가 보임) 관련 상품이 없으면 = 이 사이트엔 없음
+    const words = q.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const pageWorked = out.noResults || (out.items || []).length > 0 ||
+      (out.links || []).some(l => words.some(w => l.text.toLowerCase().includes(w)));
+    return { items: [], mode: pageWorked ? 'tab' : 'link' };
   } catch (e) {
     return { items: [], mode: 'error', error: e instanceof Stopped ? 'stopped' : 'tabTimeout' };
   } finally {
