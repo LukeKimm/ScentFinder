@@ -13,17 +13,20 @@ A Safari web extension (macOS + iOS) that searches 30 US, UK and Canadian fragra
 - 한국어 / English 화면 전환
 - 가격을 못 읽은 사이트는 버튼 하나로 검색 결과 탭 열기
 
-## 설치
+## 빠른 설치
+
+Mac에 App Store에서 [Xcode](https://apps.apple.com/app/xcode/id497799835)를 설치하고 Xcode › Settings › Accounts에 Apple ID를 등록한 뒤:
 
 ```
+git clone https://github.com/LukeKimm/ScentFinder.git
 cd ScentFinder
 chmod +x build.sh
 ./build.sh
 ```
 
-Xcode에서 4개 타깃의 Team을 지정하고 실행합니다. 자세한 순서와 앱스토어 출시 방법은 아래 문서를 참고하세요.
+Xcode가 열리면 4개 타깃의 **Signing & Capabilities › Team**을 지정하고 ▶ 실행 → Safari 설정에서 확장을 켜고 웹사이트 접근을 허용합니다. 업데이트는 `git pull`.
 
-- [설치안내.md](설치안내.md) — 빠른 설치 안내
+- [설치안내.md](설치안내.md) — Xcode 설치부터 Mac·아이폰 설치, 업데이트까지 단계별 안내
 - [docs/설치-출시-가이드.md](docs/설치-출시-가이드.md) — Xcode 설치 & 앱스토어 출시 상세 가이드
 
 ## 구조
