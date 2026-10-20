@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Scent Price Finder</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <div class="topRow">
+        <h1 data-i18n="appName"></h1>
+        <div class="langSwitch" id="langSwitch"></div>
+      </div>
+      <form id="searchForm" class="search">
+        <input id="q" type="search" data-i18n-ph="search.placeholder" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button type="submit" id="go" data-i18n="search.button"></button>
+      </form>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="controls">
+      <div class="chips" id="catChips"></div>
+      <div class="chips">
+        <label class="chip"><input type="checkbox" id="optSoldout"><span data-i18n="opt.soldout"></span></label>
+        <label class="chip"><input type="checkbox" id="optLoose"><span data-i18n="opt.loose"></span></label>
+      </div>
+      <div class="selects">
+        <label><span data-i18n="sort.label"></span>
+          <select id="sort">
+            <option value="krw" data-i18n="sort.krw"></option>
+            <option value="perml" data-i18n="sort.perml"></option>
+            <option value="store" data-i18n="sort.store"></option>
+          </select>
+        </label>
+        <label><span data-i18n="size.label"></span>
+          <select id="size"></select>
+        </label>
+      </div>
+    </section>
+
+    <details class="panel" id="storePanel">
+      <summary><span class="sumTitle" data-i18n="stores.title"></span> <span id="storeCount"></span></summary>
+      <div id="storeGroups"></div>
+      <div class="addStore">
+        <div class="sub" data-i18n="stores.add.title"></div>
+        <form id="addForm" class="addRow">
+          <input id="addName" data-i18n-ph="stores.add.name" required>
+          <input id="addDomain" data-i18n-ph="stores.add.domain" required autocapitalize="off">
+          <select id="addRegion">
+            <option value="US" data-i18n="region.US"></option>
+            <option value="UK" data-i18n="region.UK"></option>
+            <option value="CA" data-i18n="region.CA"></option>
+            <option value="EU" data-i18n="region.EU"></option>
+            <option value="ETC" data-i18n="region.ETC"></option>
+          </select>
+          <button type="submit" data-i18n="stores.add.button"></button>
+        </form>
+      </div>
+      <div class="panelFoot">
+        <button type="button" id="resetDetect" class="link" data-i18n="stores.redetect"></button>
+      </div>
+    </details>
+
+    <details class="panel" id="ratePanel">
+      <summary><span class="sumTitle" data-i18n="rates.title"></span> <span id="rateInfo"></span></summary>
+      <div class="rates" id="rateInputs"></div>
+      <p class="hint" data-i18n="rates.hint"></p>
+    </details>
+
+    <div id="status" class="status" hidden></div>
+    <div id="best" class="best" hidden></div>
+    <div id="results" class="results"></div>
+    <p id="empty" class="emptyMsg" hidden></p>
+  </main>
+
+  <template id="cardTpl">
+    <a class="card" target="_blank" rel="noopener noreferrer">
+      <img class="thumb" alt="" loading="lazy" referrerpolicy="no-referrer">
+      <div class="body">
+        <div class="meta"><span class="store"></span><span class="region"></span></div>
+        <div class="title"></div>
+        <div class="variant"></div>
+        <div class="badges"></div>
+      </div>
+      <div class="price">
+        <div class="krw"></div>
+        <div class="orig"></div>
+        <div class="perml"></div>
+      </div>
+    </a>
+  </template>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
