@@ -130,8 +130,12 @@ async function pageApi(q, mode, attr, handles) {
       const d = await getJSON(`/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=10&resources[options][unavailable_products]=last`);
       const products = d && d.resources && d.resources.results && d.resources.results.products;
       if (Array.isArray(products)) {
-        const details = await Promise.all(products.slice(0, 8).map(p => getJSON(`/products/${p.handle}.js`).catch(() => null)));
-        done({ kind: 'shopify', raw: { products, details, currency: await currency() } });
+        // 검색어 단어가 많이 들어간 상품부터 용량별 정보를 받음
+        const words = q.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        const score = p => words.filter(w => `${p.title} ${p.vendor || ''}`.toLowerCase().includes(w)).length;
+        const ranked = products.map((p, i) => ({ p, i })).sort((a, b) => score(b.p) - score(a.p) || a.i - b.i).map(x => x.p);
+        const details = await Promise.all(ranked.slice(0, 8).map(p => getJSON(`/products/${p.handle}.js`).catch(() => null)));
+        done({ kind: 'shopify', raw: { products: ranked, details, currency: await currency() } });
         return;
       }
     } catch { /* Shopify 아님 */ }

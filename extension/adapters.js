@@ -132,9 +132,14 @@ async function shopify(store, q, ctx) {
   const products = data?.resources?.results?.products;
   if (!Array.isArray(products)) throw new Error('notshopify');
   const currency = (await shopifyCurrency(base, ctx.credentials)) || ctx.regionCurrency;
+  // 검색어와 관련 높은 상품부터 용량별 정보를 받음 (찾는 향수가 검색 결과 9번째 이후에 있어도 빠지지 않게)
+  const ranked = products
+    .map((p, i) => ({ p, i, rel: relevance(q, p.title, p.vendor || '') }))
+    .sort((a, b) => b.rel - a.rel || a.i - b.i)
+    .map(x => x.p);
   // 차단을 피하려고 상세 요청은 동시에 2개까지만
-  const details = await mapLimit(products.slice(0, MAX_SHOPIFY_DETAIL), 2, p => shopifyDetail(base, p.handle, ctx.credentials));
-  return shopifyItems(base, products, details, currency);
+  const details = await mapLimit(ranked.slice(0, MAX_SHOPIFY_DETAIL), 2, p => shopifyDetail(base, p.handle, ctx.credentials));
+  return shopifyItems(base, ranked, details, currency);
 }
 
 // ───────────────── WooCommerce ─────────────────
