@@ -2,6 +2,7 @@ import { DEFAULT_STORES, REGIONS, defaultSearchUrl } from './stores.js';
 import { searchStore, checkSiteAccess } from './adapters.js';
 import { searchViaTab, tabsSupported, cleanupTabs, snapshotTabs } from './tabs.js';
 import { CATEGORIES, classify, extractSize, extractConcentration, relevance, itemRelevance, isNonFragrance } from './classify.js';
+import { toEnglishQuery } from './ko-search.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
@@ -23,7 +24,7 @@ const state = {
   filters: { boxed: true, tester: true, unboxed: true, sample: true, set: true, soldout: false, loose: false },
   sort: 'krw',
   opts: { tabs: true },
-  route: {},           // storeId → { tabFails, until } 탭 실패가 반복된 사이트는 잠시 건너뜀
+  route: {},           // storeId → { tabFails } 탭으로 읽기에 실패한 적 있는 사이트는 탭 순서를 뒤로 미룸
   rateOverride: {},
   rates: null,          // { at, src, values: {USD: 1400, ...} }
   results: [],          // 정규화된 결과
@@ -240,22 +241,35 @@ function normalizeItem(raw, store, query) {
   };
 }
 
-// 탭으로도 2번 연속 못 읽은 사이트는 3일 동안 탭을 건너뜀 (검색 시간 단축)
-const ROUTE_MAX_FAILS = 2;
-const ROUTE_SKIP_MS = 3 * 24 * 3600 * 1000;
-const tabSkipped = id => { const r = state.route[id]; return !!(r && r.tabFails >= ROUTE_MAX_FAILS && Date.now() < r.until); };
+// 탭으로 읽기에 실패한 적 있는 사이트도 건너뛰지 않고 매번 다시 시도함.
+// 다만 다른 사이트를 먼저 끝내도록 탭 순서만 뒤로 미룸
+const hadTabFail = id => { const r = state.route[id]; return !!(r && r.tabFails > 0); };
 function noteTab(id, ok) {
-  if (ok) { delete state.route[id]; save('route'); return; }
-  const r = state.route[id] || { tabFails: 0, until: 0 };
-  r.tabFails += 1;
-  if (r.tabFails >= ROUTE_MAX_FAILS) r.until = Date.now() + ROUTE_SKIP_MS;
-  state.route[id] = r;
+  if (ok) { if (state.route[id]) { delete state.route[id]; save('route'); } return; }
+  const r = state.route[id] || { tabFails: 0 };
+  state.route[id] = { tabFails: (r.tabFails || 0) + 1 };
   save('route');
 }
 
-async function runSearch(query) {
-  query = query.trim();
-  if (!query || state.running) return;
+// 검색창 아래 안내: 한글 자동 변환 기능 안내 / 실제로 바꾼 검색어
+function renderQueryNote() {
+  const el = $('qNote');
+  const c = state.conv;
+  el.className = 'qNote';
+  if (!c || !c.changed) { el.textContent = t('qnote.hint'); return; }
+  if (!c.query) { el.textContent = t('qnote.none'); el.classList.add('warn'); return; }
+  el.textContent = t('qnote.conv', { q: c.query }) + (c.unknown.length ? ' · ' + t('qnote.unknown', { w: c.unknown.join(', ') }) : '');
+  el.classList.add(c.unknown.length ? 'warn' : 'conv');
+}
+
+async function runSearch(input) {
+  input = input.trim();
+  if (!input || state.running) return;
+  // 한글 브랜드·향수 이름은 영어로 바꿔서 검색 (해외 쇼핑몰은 영어 이름으로만 찾을 수 있음)
+  state.conv = toEnglishQuery(input);
+  renderQueryNote();
+  const query = state.conv.query;
+  if (!query) return;
   state.running = true;
   state.stopped = false;
   state.abort = { aborted: false };
@@ -265,9 +279,9 @@ async function runSearch(query) {
   state.startedAt = Date.now();
   state.finishedAt = 0;
   $('size').value = '';
-  history.replaceState(null, '', `?q=${encodeURIComponent(query)}`);
+  history.replaceState(null, '', `?q=${encodeURIComponent(input)}`);
   document.title = `${query} · ${t('appName')}`;
-  rememberRecent(query);
+  rememberRecent(input);
 
   const stores = allStores().filter(isOn);
   stores.forEach(s => { state.storeStatus[s.id] = { state: 'wait' }; });
@@ -297,6 +311,7 @@ async function runSearch(query) {
   const useTabs = state.opts.tabs && tabsSupported();
   if (useTabs) await snapshotTabs();
   const tabJobs = [];
+  const deferredTabs = [];   // 예전에 탭 읽기가 실패했던 사이트 → 나머지가 끝난 뒤 시도
   const runTab = limiter(TAB_CONCURRENCY);
 
   const apply = (store, res, viaTab = false) => {
@@ -340,8 +355,12 @@ async function runSearch(query) {
     while (idx < stores.length) {
       const store = stores[idx++];
       if (signal.aborted) { apply(store, { items: [], mode: 'error', error: 'stopped' }); continue; }
-      const canTab = useTabs && !tabSkipped(store.id);
-      if (store.tabOnly && canTab) { queueTab(store, null); continue; }
+      const canTab = useTabs;
+      const toTab = (fetchRes) => {
+        if (hadTabFail(store.id)) { state.storeStatus[store.id] = { state: 'tabWait' }; renderStatus(); deferredTabs.push([store, fetchRes]); }
+        else queueTab(store, fetchRes);
+      };
+      if (store.tabOnly && canTab) { toTab(null); continue; }
       const res = await searchStore(store, query, {
         detected: state.detected[store.id],
         searchUrlOverride: state.urlOverride[store.id],
@@ -350,11 +369,12 @@ async function runSearch(query) {
       if (res.detected && state.detected[store.id] !== res.detected) { state.detected[store.id] = res.detected; save('detected'); }
       if (res.resetDetected) { delete state.detected[store.id]; save('detected'); }
       const failed = res.mode === 'error' || res.mode === 'link';
-      if (failed && canTab && !signal.aborted) queueTab(store, res);
-      else apply(store, failed && useTabs && tabSkipped(store.id) ? { ...res, skipped: true } : res);
+      if (failed && canTab && !signal.aborted) toTab(res);
+      else apply(store, res);
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, stores.length) }, worker));
+  for (const [store, fetchRes] of deferredTabs) queueTab(store, fetchRes);
   await Promise.all(tabJobs);
   await cleanupTabs();
 
@@ -654,6 +674,7 @@ document.addEventListener('auxclick', linkHandler);
 
 function renderAll() {
   applyStatic();
+  renderQueryNote();
   document.title = state.query ? `${state.query} · ${t('appName')}` : t('appName');
   renderChips();
   renderAdv();
@@ -673,6 +694,7 @@ function renderAll() {
   renderAdv();
   renderStores();
   renderRates();
+  renderQueryNote();
   renderResults();
   ensureRates();
   const q = new URLSearchParams(location.search).get('q');
