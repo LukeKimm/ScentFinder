@@ -7,7 +7,7 @@
 
 import { defaultSearchUrl } from './stores.js';
 import { shopifyItems, wooItems, abs, CHALLENGE_TITLE } from './adapters.js';
-import { relevance } from './classify.js';
+import { relevance, itemRelevance } from './classify.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
 
@@ -420,12 +420,16 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
 
     // 검색 결과에 관련 상품 가격이 없으면 관련 상품 페이지를 직접 열어봄
     // (관련 상품이 없거나, 있어도 "최저 옵션가"뿐이면 상품 페이지에서 용량별 가격을 확인)
-    const relevant = items.filter(i => relevance(q, i.title, i.vendor, i.variant) >= relMin);
+    const relevant = items.filter(i => itemRelevance(q, [i.title, i.vendor], [i.variant]) >= relMin);
     if (!relevant.some(i => !i.partial)) {
       const seen = new Set();
+      let productRe = null;
+      try { productRe = store.productPattern ? new RegExp(store.productPattern) : null; } catch { /* 잘못된 패턴 */ }
       const candidates = (out.links || [])
         .map(l => ({ ...l, rel: relevance(q, l.text) }))
         .filter(l => l.rel >= relMin && l.href !== out.url)
+        // 상품 주소 형식을 아는 사이트는 상품 페이지만 열어봄 (검색어가 적힌 배너·카테고리 링크 제외)
+        .filter(l => !productRe || productRe.test(l.href))
         .sort((a, b) => b.rel - a.rel)
         .filter(l => !seen.has(l.href) && seen.add(l.href))
         .slice(0, MAX_PRODUCT_PAGES);
@@ -438,7 +442,10 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
         const page = await runExtract(tab.id, q, 'dom', Date.now() + 12000, signal);
         if (page.error) continue;
         // 상품 페이지 제목에 브랜드가 빠진 경우가 있어서(예: "Aventus Cologne"), 검색 카드 글자를 관련도 판단용으로 붙여둠
-        const got = domItems(page, regionCurrency).map(i => ({ ...i, title: i.title || c.text, relHint: c.text }));
+        // 단, 상품이 여러 개 나오는 페이지(목록·카테고리)면 붙이지 않음 — 그 페이지 상품 전부가 관련 상품으로 둔갑하는 걸 막음
+        const pageItems = domItems(page, regionCurrency);
+        const single = pageItems.length <= 6;
+        const got = pageItems.map(i => ({ ...i, title: i.title || c.text, relHint: single ? c.text : '' }));
         // 상품 페이지에서 용량별 가격을 얻었으면, 같은 상품의 목록 "최저 옵션가" 항목은 뺌
         if (got.some(i => !i.partial)) {
           const path = u => { try { return new URL(u).pathname; } catch { return u; } };

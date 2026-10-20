@@ -1,7 +1,7 @@
 import { DEFAULT_STORES, REGIONS, defaultSearchUrl } from './stores.js';
 import { searchStore, checkSiteAccess } from './adapters.js';
 import { searchViaTab, tabsSupported, cleanupTabs, snapshotTabs } from './tabs.js';
-import { CATEGORIES, classify, extractSize, extractConcentration, relevance, isNonFragrance } from './classify.js';
+import { CATEGORIES, classify, extractSize, extractConcentration, relevance, itemRelevance, isNonFragrance } from './classify.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
@@ -236,7 +236,7 @@ function normalizeItem(raw, store, query) {
     size, category,
     conc: extractConcentration(`${raw.title} ${raw.variant} ${raw.type}`),
     nonFrag: isNonFragrance(raw),
-    rel: relevance(query, raw.title, raw.vendor, raw.variant, raw.relHint || ''),
+    rel: itemRelevance(query, [raw.title, raw.vendor], [raw.variant, raw.relHint || '']),
   };
 }
 
@@ -525,8 +525,7 @@ function visibleItems() {
   const f = state.filters;
   const sizeSel = $('size').value;
   return state.results
-    .filter(i => !i.nonFrag)
-    .filter(i => f.loose || i.rel >= RELEVANCE_MIN)
+    .filter(i => f.loose || (!i.nonFrag && i.rel >= RELEVANCE_MIN))
     .filter(i => f[i.category] !== false)
     .filter(i => f.soldout || i.available)
     .filter(i => !sizeSel || String(i.size) === sizeSel)
@@ -592,7 +591,8 @@ function renderResults() {
     if (i.size) add(`${i.size}ml`);
     if (i.conc) add(concText(i.conc));
     if (!i.available) add(t('badge.soldout'), 'out');
-    if (i.rel < RELEVANCE_MIN) add(t('badge.lowrel'));
+    if (i.nonFrag) add(t('badge.nonfrag'), 'nonfrag');
+    else if (i.rel < RELEVANCE_MIN) add(t('badge.lowrel'));
     node.querySelector('.krw').textContent = fmtKRW(i.krw);
     node.querySelector('.orig').textContent = fmtOrig(i.price, i.currency) + (i.priceMax ? ` ~ ${fmtOrig(i.priceMax, i.currency)}` : '');
     node.querySelector('.perml').textContent = Number.isFinite(i.perml) ? t('perml', { v: fmtKRW(i.perml) }) : '';
@@ -606,6 +606,25 @@ function renderResults() {
     empty.hidden = false;
     empty.textContent = state.results.length ? t('empty.filtered') : t('empty.none');
   } else empty.hidden = true;
+
+  // 숨긴 결과 (관련 없는 상품·향수 아닌 품목) 개수와 보기/숨기기
+  const note = $('hiddenNote');
+  const hidden = state.results.filter(i => i.nonFrag || i.rel < RELEVANCE_MIN).length;
+  if (!state.query || !hidden) note.hidden = true;
+  else {
+    note.hidden = false;
+    note.textContent = state.filters.loose ? t('hidden.shown', { n: hidden }) : t('hidden.count', { n: hidden });
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = state.filters.loose ? t('hidden.hide') : t('hidden.show');
+    btn.addEventListener('click', () => {
+      state.filters.loose = !state.filters.loose;
+      $('optLoose').checked = state.filters.loose;
+      save('filters');
+      renderResults();
+    });
+    note.appendChild(btn);
+  }
 }
 
 // ───────── 시작 ─────────

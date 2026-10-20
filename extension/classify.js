@@ -36,8 +36,23 @@ const RE_SAMPLE = /\b(decants?|samples?|vials?|split|atomi[sz]er|travel\s*(spray
 const RE_SET = /\b(gift\s*set|coffret|\d\s*-?\s*(pc|pcs|piece)s?\b|set\s+(of|for)|discovery\s*set|\bset\b)/i;
 const RE_TESTER = /\btesters?\b/i;
 const RE_UNBOXED = /\b(unbox(ed)?|no\s*box|without\s*box|w\/?o\s*box|box\s*less|boxless|no\s*cap|without\s*cap|scratch(ed)?|damaged\s*box)\b/i;
-// 바디로션·데오 등 향수 아닌 품목
-const RE_NONFRAG = /\b(deodorant|deo\s*stick|body\s*(lotion|wash|cream|mist|spray|oil)|shower\s*gel|after\s*shave\s*balm|hair\s*mist|soap|candle|shampoo)\b/i;
+// 향수가 아닌 품목 (바디·헤어·면도·스킨케어·메이크업·홈 향·액세서리·기프트카드)
+const RE_NONFRAG = new RegExp('\\b(' + [
+  'deodorants?', 'deo\\s*(stick|spray|roll-?on)', 'anti-?perspirants?', 'roll-?on\\s*deo',
+  'body\\s*(lotion|wash|cream|mist|spray|oil|milk|butter|scrub|powder|gel|balm|souffle|emulsion)',
+  'hand\\s*(cream|wash|lotion|balm|soap)', 'shower\\s*(gel|cream|oil)', 'bath\\s*(gel|oil|salts?|bombs?|foam|soak)',
+  '(after|pre)\\s*-?\\s*shave\\s*(balm|cream|gel|emulsion)', 'shav(e|ing)\\s*(cream|foam|gel|soap|brush)', 'razors?', 'beard\\s*(oil|balm)',
+  'hair\\s*(mist|perfume|oil|spray)', 'shampoos?', 'conditioners?', 'soaps?',
+  'candles?', 'diffusers?', 'room\\s*(spray|mist)', 'home\\s*(fragrance|spray)', 'incense', 'sachets?', 'car\\s*(fragrance|freshener)',
+  'lip\\s*(stick|gloss|balm|liner|colou?r|oil)', 'lipsticks?', 'mascara', 'foundation', 'concealer', 'eye\\s*(shadow|liner|cream)', 'eyeliner', 'bronzer', 'highlighter',
+  'nail\\s*(polish|lacquer|colou?r)', 'serums?', 'moisturi[sz]er', 'cleanser', 'toner', 'face\\s*(cream|mask|wash|oil)', 'sunscreen', 'spf\\s*\\d+',
+  'gift\\s*cards?', 'e-?gift', 'gift\\s*(wrap|wrapping)', 'tote(\\s*bag)?', 'cosmetic\\s*bag', 'key\\s*chain', 'keychain', 'sunglasses', 'wallet',
+  'empty\\s*(bottle|atomi[sz]er|vial)', 'funnel', 't-?shirt', 'hoodie',
+].join('|') + ')\\b', 'i');
+// 쇼핑몰이 붙인 상품 분류(Shopify product_type 등)
+const RE_NONFRAG_TYPE = /(skin\s*care|make-?up|cosmetic|bath\s*(&|and)?\s*body|body\s*care|hair\s*care|candle|home\s*(fragrance|scent)|gift\s*card|accessor(y|ies)|apparel|deodorant|shav(e|ing))/i;
+// 향수가 들어간 세트는 바디로션이 같이 있어도 향수로 봄
+const RE_FRAGWORD = /\b(eau\s*de|edp|edt|edc|parfum|extrait|cologne|fragrance|perfume)\b/i;
 
 export function classify({ title = '', variant = '', type = '' }, size) {
   const text = `${title} ${variant} ${type}`;
@@ -50,7 +65,13 @@ export function classify({ title = '', variant = '', type = '' }, size) {
 }
 
 export function isNonFragrance({ title = '', variant = '', type = '' }) {
-  return RE_NONFRAG.test(`${title} ${variant} ${type}`);
+  if (type && RE_NONFRAG_TYPE.test(type) && !RE_FRAGWORD.test(title)) return true;
+  // 옵션 이름은 짧을 때만 봄 (카드 전체 글자에는 "사은품 바디로션" 같은 문구가 섞일 수 있음)
+  const v = variant && variant.length <= 60 ? variant : '';
+  const text = `${title} ${v}`;
+  if (!RE_NONFRAG.test(text)) return false;
+  if (RE_SET.test(text) && RE_FRAGWORD.test(text)) return false;
+  return true;
 }
 
 // 농도 표시 (EDP/EDT/Extrait 등)
@@ -76,9 +97,11 @@ export function normalize(s = '') {
 
 const STOP = new Set(['by', 'for', 'the', 'de', 'eau', 'parfum', 'perfume', 'cologne', 'spray', 'edp', 'edt', 'ml', 'oz', 'men', 'women', 'man', 'woman', 'and']);
 
+const queryTokens = q => normalize(q).split(' ').filter(w => w.length > 1 && !STOP.has(w) && !/^\d+$/.test(w));
+
 // 0~1. 검색어 핵심 단어가 상품명·브랜드에 얼마나 포함되는지
 export function relevance(query, ...fields) {
-  const qTokens = normalize(query).split(' ').filter(w => w.length > 1 && !STOP.has(w) && !/^\d+$/.test(w));
+  const qTokens = queryTokens(query);
   if (!qTokens.length) return 1;
   const hay = ' ' + normalize(fields.join(' ')) + ' ';
   const squashed = hay.replace(/\s+/g, '');
@@ -88,4 +111,12 @@ export function relevance(query, ...fields) {
     else if (squashed.includes(w)) hit += 0.8;
   }
   return hit / qTokens.length;
+}
+
+// 상품 관련도: 상품명·브랜드(core)에 검색어 절반 이상이 있어야 하고, 그때만 옵션·카드 글자(extra)까지 보태서 계산.
+// (카드 주변 글자나 "검색: amouage interlude" 같은 문구만으로 엉뚱한 상품이 통과하지 않게)
+export function itemRelevance(query, core, extra) {
+  const c = relevance(query, ...core);
+  if (c < 0.5) return c;
+  return Math.max(c, relevance(query, ...core, ...extra));
 }

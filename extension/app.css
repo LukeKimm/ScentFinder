@@ -148,3 +148,7 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
 .accBtns { display: flex; gap: 8px; flex-wrap: wrap; }
 .accBtns button { font: inherit; font-weight: 600; font-size: 14px; padding: 8px 14px; border-radius: 10px; border: 0; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
 .accBtns button.ghost { background: var(--chip); color: var(--fg); }
+
+.hiddenNote { color: var(--muted); text-align: center; font-size: 12px; padding: 14px 0 24px; }
+.hiddenNote button { background: none; border: 0; color: var(--accent, inherit); text-decoration: underline; cursor: pointer; font: inherit; padding: 0 0 0 4px; }
+.badge.nonfrag { opacity: .8; }
