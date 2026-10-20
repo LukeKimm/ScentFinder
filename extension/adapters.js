@@ -34,6 +34,8 @@ async function request(url, kind = 'text', { timeout = TIMEOUT_MS, credentials =
     return text;
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('timeout');
+    // 응답 없이 바로 실패 = 네트워크 오류 또는 Safari 가 확장의 사이트 접근을 막음
+    if (e.name === 'TypeError') throw new Error('network');
     throw e;
   } finally {
     clearTimeout(timer);
@@ -274,6 +276,20 @@ const ADAPTERS = { shopify, woo, html };
 
 // mode: 'shopify' | 'woo' | 'html' | 'link'(데이터 없음, 직접 확인 필요) | 'error'
 // blocked: 봇 차단으로 판단되면 true
+// Safari 가 확장의 웹사이트 접근을 허용했는지 확인.
+// CORS 를 허용하지 않는 일반 사이트 두 곳에 요청해서, 둘 다 응답 없이 실패하면 권한이 없는 것.
+export async function checkSiteAccess() {
+  const probes = ['https://perfumebox.com/cart.js', 'https://www.jomashop.com/robots.txt'];
+  const results = await Promise.all(probes.map(async u => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    try { await fetch(u, { credentials: 'omit', signal: ctl.signal }); return 'ok'; }
+    catch (e) { return e.name === 'AbortError' ? 'timeout' : 'blocked'; }
+    finally { clearTimeout(timer); }
+  }));
+  return results.includes('ok') ? 'ok' : results.every(r => r === 'blocked') ? 'blocked' : 'unknown';
+}
+
 export async function searchStore(store, q, { detected, searchUrlOverride, regionCurrency }) {
   const searchUrl = searchUrlOverride || defaultSearchUrl(store);
   // 기본은 쿠키 없이 요청 (v1.1 에서 잘 되던 방식). 쿠키를 붙이면 Safari 에서 정상 몰까지 실패하는 경우가 있어서,

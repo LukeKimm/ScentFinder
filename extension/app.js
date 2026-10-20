@@ -1,5 +1,5 @@
 import { DEFAULT_STORES, REGIONS, defaultSearchUrl } from './stores.js';
-import { searchStore } from './adapters.js';
+import { searchStore, checkSiteAccess } from './adapters.js';
 import { searchViaTab, tabsSupported, cleanupTabs, snapshotTabs } from './tabs.js';
 import { CATEGORIES, classify, extractSize, extractConcentration, relevance, isNonFragrance } from './classify.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
@@ -277,6 +277,22 @@ async function runSearch(query) {
 
   await ensureRates();
 
+  // Safari 가 사이트 접근을 막고 있으면(확장 업데이트·재설치 후 자주 초기화됨) 모든 요청이 실패하고 탭도 사이트마다 허락을 기다리며 멈춤.
+  // 30곳을 헛돌지 말고 바로 알려줌
+  const access = await checkSiteAccess();
+  renderAccess(access === 'blocked');
+  if (access === 'blocked') {
+    // 권한이 없을 때 쌓인 "탭 실패" 기록은 사이트 문제가 아니라서 지움
+    state.route = {}; save('route');
+    stores.forEach(s => { state.storeStatus[s.id] = { state: 'err', error: 'noAccess' }; });
+    state.running = false;
+    state.finishedAt = Date.now();
+    stopProgressTimer();
+    renderStatus();
+    renderResults();
+    return;
+  }
+
   const signal = state.abort;
   const useTabs = state.opts.tabs && tabsSupported();
   if (useTabs) await snapshotTabs();
@@ -350,6 +366,25 @@ async function runSearch(query) {
   renderStores();
   renderStatus();
   renderResults();
+}
+
+// ───────── 사이트 접근 권한 안내 ─────────
+function renderAccess(blocked) {
+  const box = $('access');
+  box.hidden = !blocked;
+  if (!blocked) return;
+  box.innerHTML = `
+    <div class="accTitle">${esc(t('access.title'))}</div>
+    <ol class="accSteps"><li>${esc(t('access.step1'))}</li><li>${esc(t('access.step2'))}</li><li>${esc(t('access.step3'))}</li></ol>
+    <div class="accBtns">
+      <button type="button" id="accRequest">${esc(t('access.request'))}</button>
+      <button type="button" id="accRetry" class="ghost">${esc(t('access.retry'))}</button>
+    </div>`;
+  $('accRequest').addEventListener('click', async () => {
+    try { await api.permissions.request({ origins: ['<all_urls>'] }); } catch { /* 지원 안 하면 설정에서 직접 */ }
+    runSearch($('q').value);
+  });
+  $('accRetry').addEventListener('click', () => runSearch($('q').value));
 }
 
 // ───────── 진행 상태 ─────────
