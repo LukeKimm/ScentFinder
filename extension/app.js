@@ -1,6 +1,6 @@
 import { DEFAULT_STORES, REGIONS, defaultSearchUrl } from './stores.js';
 import { searchStore } from './adapters.js';
-import { searchViaTab, tabsSupported } from './tabs.js';
+import { searchViaTab, tabsSupported, cleanupTabs } from './tabs.js';
 import { CATEGORIES, classify, extractSize, extractConcentration, relevance, isNonFragrance } from './classify.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
 
@@ -12,7 +12,7 @@ const RATE_CURRENCIES = ['USD', 'GBP', 'CAD', 'EUR'];
 const FALLBACK_RATES = { USD: 1400, GBP: 1850, CAD: 1000, EUR: 1600, KRW: 1 }; // API 실패 시에만 사용
 const RATE_TTL = 6 * 3600 * 1000;
 const CONCURRENCY = 8;
-const TAB_CONCURRENCY = 2;   // 숨은 탭은 동시에 2개까지
+const TAB_CONCURRENCY = 3;   // 숨은 탭은 동시에 3개까지
 const RELEVANCE_MIN = 0.75;
 
 const state = {
@@ -22,7 +22,8 @@ const state = {
   urlOverride: {},      // storeId → 검색 URL
   filters: { boxed: true, tester: true, unboxed: true, sample: true, set: true, soldout: false, loose: false },
   sort: 'krw',
-  opts: { cookies: true, tabs: true },
+  opts: { tabs: true },
+  route: {},           // storeId → { tabFails, until } 탭 실패가 반복된 사이트는 잠시 건너뜀
   rateOverride: {},
   rates: null,          // { at, src, values: {USD: 1400, ...} }
   results: [],          // 정규화된 결과
@@ -34,7 +35,7 @@ const state = {
 // ───────── 저장소 ─────────
 async function load() {
   try {
-    const s = await api.storage.local.get(['enabled', 'custom', 'detected', 'urlOverride', 'filters', 'sort', 'opts', 'rateOverride', 'rates']);
+    const s = await api.storage.local.get(['enabled', 'custom', 'detected', 'urlOverride', 'filters', 'sort', 'opts', 'route', 'rateOverride', 'rates']);
     Object.assign(state, {
       enabled: s.enabled || {},
       custom: s.custom || [],
@@ -43,6 +44,7 @@ async function load() {
       filters: { ...state.filters, ...(s.filters || {}) },
       sort: s.sort || 'krw',
       opts: { ...state.opts, ...(s.opts || {}) },
+      route: s.route || {},
       rateOverride: s.rateOverride || {},
       rates: s.rates || null,
     });
@@ -194,7 +196,7 @@ $('addForm').addEventListener('submit', e => {
   $('addName').value = ''; $('addDomain').value = '';
   renderStores();
 });
-$('resetDetect').addEventListener('click', () => { state.detected = {}; save('detected'); renderStores(); });
+$('resetDetect').addEventListener('click', () => { state.detected = {}; state.route = {}; save('detected', 'route'); renderStores(); });
 
 // ───────── 필터 칩 ─────────
 function renderChips() {
@@ -219,11 +221,9 @@ $('sort').addEventListener('change', e => { state.sort = e.target.value; save('s
 $('size').addEventListener('change', () => renderResults());
 
 function renderAdv() {
-  $('optCookies').checked = !!state.opts.cookies;
   $('optTabs').checked = !!state.opts.tabs && tabsSupported();
   $('optTabs').disabled = !tabsSupported();
 }
-$('optCookies').addEventListener('change', e => { state.opts.cookies = e.target.checked; save('opts'); });
 $('optTabs').addEventListener('change', e => { state.opts.tabs = e.target.checked; save('opts'); });
 
 // ───────── 검색 ─────────
@@ -240,14 +240,30 @@ function normalizeItem(raw, store, query) {
   };
 }
 
+// 탭으로도 2번 연속 못 읽은 사이트는 3일 동안 탭을 건너뜀 (검색 시간 단축)
+const ROUTE_MAX_FAILS = 2;
+const ROUTE_SKIP_MS = 3 * 24 * 3600 * 1000;
+const tabSkipped = id => { const r = state.route[id]; return !!(r && r.tabFails >= ROUTE_MAX_FAILS && Date.now() < r.until); };
+function noteTab(id, ok) {
+  if (ok) { delete state.route[id]; save('route'); return; }
+  const r = state.route[id] || { tabFails: 0, until: 0 };
+  r.tabFails += 1;
+  if (r.tabFails >= ROUTE_MAX_FAILS) r.until = Date.now() + ROUTE_SKIP_MS;
+  state.route[id] = r;
+  save('route');
+}
+
 async function runSearch(query) {
   query = query.trim();
   if (!query || state.running) return;
   state.running = true;
+  state.stopped = false;
+  state.abort = { aborted: false };
   state.query = query;
   state.results = [];
   state.storeStatus = {};
-  $('go').disabled = true;
+  state.startedAt = Date.now();
+  state.finishedAt = 0;
   $('size').value = '';
   history.replaceState(null, '', `?q=${encodeURIComponent(query)}`);
   document.title = `${query} · ${t('appName')}`;
@@ -255,13 +271,14 @@ async function runSearch(query) {
 
   const stores = allStores().filter(isOn);
   stores.forEach(s => { state.storeStatus[s.id] = { state: 'wait' }; });
+  startProgressTimer();
   renderStatus();
   renderResults();
 
   await ensureRates();
 
+  const signal = state.abort;
   const useTabs = state.opts.tabs && tabsSupported();
-  const credentials = state.opts.cookies ? 'include' : 'omit';
   const tabJobs = [];
   const runTab = limiter(TAB_CONCURRENCY);
 
@@ -270,22 +287,28 @@ async function runSearch(query) {
     state.results.push(...items);
     const relevant = items.filter(i => i.rel >= RELEVANCE_MIN && !i.nonFrag).length;
     state.storeStatus[store.id] =
-      res.mode === 'error' ? (res.blocked || res.error === 'blocked' ? { state: 'blocked', error: res.error } : { state: 'err', error: res.error }) :
-      res.mode === 'link' ? { state: res.blocked ? 'blocked' : 'link', error: res.blocked ? 'blocked' : '' } :
+      res.error === 'stopped' ? { state: 'stopped' } :
+      res.mode === 'error' ? (res.blocked || res.error === 'blocked' ? { state: 'blocked', error: res.error, skipped: res.skipped } : { state: 'err', error: res.error, skipped: res.skipped }) :
+      res.mode === 'link' ? { state: res.blocked ? 'blocked' : 'link', error: res.blocked ? 'blocked' : '', skipped: res.skipped } :
       { state: relevant ? 'ok' : 'none', count: relevant, viaTab };
     renderStatus();
     renderResults();
   };
 
   const queueTab = (store, fetchRes) => {
-    state.storeStatus[store.id] = { state: 'tab' };
+    state.storeStatus[store.id] = { state: 'tabWait' };
     renderStatus();
     tabJobs.push(runTab(async () => {
+      if (signal.aborted) { apply(store, { items: [], mode: 'error', error: 'stopped' }); return; }
+      state.storeStatus[store.id] = { state: 'tab' };
+      renderStatus();
       const res = await searchViaTab(store, query, {
         searchUrlOverride: state.urlOverride[store.id],
         regionCurrency: REGION_CURRENCY[store.region] || 'USD',
         relMin: RELEVANCE_MIN,
+        signal,
       });
+      if (res.error !== 'stopped') noteTab(store.id, res.mode === 'tab');
       // 탭으로도 못 읽으면 처음 요청의 실패 이유(봇 차단 등)를 같이 보여줌
       if (res.mode !== 'tab' && fetchRes?.blocked) res.blocked = true;
       apply(store, res, true);
@@ -296,27 +319,80 @@ async function runSearch(query) {
   const worker = async () => {
     while (idx < stores.length) {
       const store = stores[idx++];
-      if (store.tabOnly && useTabs) { queueTab(store, null); continue; }
+      if (signal.aborted) { apply(store, { items: [], mode: 'error', error: 'stopped' }); continue; }
+      const canTab = useTabs && !tabSkipped(store.id);
+      if (store.tabOnly && canTab) { queueTab(store, null); continue; }
       const res = await searchStore(store, query, {
         detected: state.detected[store.id],
         searchUrlOverride: state.urlOverride[store.id],
         regionCurrency: REGION_CURRENCY[store.region] || 'USD',
-        credentials,
       });
       if (res.detected && state.detected[store.id] !== res.detected) { state.detected[store.id] = res.detected; save('detected'); }
       if (res.resetDetected) { delete state.detected[store.id]; save('detected'); }
-      if (useTabs && (res.mode === 'error' || res.mode === 'link')) queueTab(store, res);
-      else apply(store, res);
+      const failed = res.mode === 'error' || res.mode === 'link';
+      if (failed && canTab && !signal.aborted) queueTab(store, res);
+      else apply(store, failed && useTabs && tabSkipped(store.id) ? { ...res, skipped: true } : res);
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, stores.length) }, worker));
   await Promise.all(tabJobs);
+  await cleanupTabs();
 
   state.running = false;
-  $('go').disabled = false;
+  state.stopped = signal.aborted;
+  state.finishedAt = Date.now();
+  stopProgressTimer();
+  document.title = `${query} · ${t('appName')}`;
   renderStores();
   renderStatus();
   renderResults();
+}
+
+// ───────── 진행 상태 ─────────
+let progressTimer = null;
+function startProgressTimer() {
+  stopProgressTimer();
+  progressTimer = setInterval(renderProgress, 1000);
+}
+function stopProgressTimer() {
+  if (progressTimer) clearInterval(progressTimer);
+  progressTimer = null;
+}
+function renderProgress() {
+  const box = $('progress');
+  const entries = Object.values(state.storeStatus);
+  if (!state.query || !entries.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const total = entries.length;
+  const pending = entries.filter(e => e.state === 'wait' || e.state === 'tab' || e.state === 'tabWait');
+  const done = total - pending.length;
+  const checked = entries.filter(e => !['wait', 'tab', 'tabWait', 'stopped'].includes(e.state)).length;
+  const inTab = entries.filter(e => e.state === 'tab').length;
+  const tabWait = entries.filter(e => e.state === 'tabWait').length;
+  const found = visibleItems().length;
+  const needCheckN = entries.filter(e => ['link', 'blocked', 'err', 'stopped'].includes(e.state)).length;
+  const secs = Math.round(((state.finishedAt || Date.now()) - (state.startedAt || Date.now())) / 1000);
+  box.className = 'progress ' + (state.running ? 'running' : state.stopped ? 'stopped' : 'done');
+  const label = state.running
+    ? t('prog.running', { done, total })
+    : state.stopped ? t('prog.stopped', { done: checked, total }) : t('prog.done', { total });
+  const detail = state.running
+    ? [inTab ? t('prog.inTab', { n: inTab }) : '', tabWait ? t('prog.tabWait', { n: tabWait }) : '', t('prog.found', { n: found }), t('prog.secs', { n: secs })].filter(Boolean).join(' · ')
+    : [t('prog.found', { n: found }), needCheckN ? t('prog.needCheck', { n: needCheckN }) : '', t('prog.secs', { n: secs })].filter(Boolean).join(' · ');
+  box.innerHTML = `
+    <div class="progRow">
+      <span class="progIcon" aria-hidden="true"></span>
+      <span class="progLabel">${esc(label)}</span>
+      <span class="progDetail">${esc(detail)}</span>
+      ${state.running ? `<button type="button" class="progStop" id="stopBtn">${esc(t('prog.stop'))}</button>` : ''}
+    </div>
+    <div class="progBar"><span style="width:${total ? Math.round(done / total * 100) : 0}%"></span></div>`;
+  const stop = $('stopBtn');
+  if (stop) stop.addEventListener('click', () => { if (state.abort) state.abort.aborted = true; stop.disabled = true; stop.textContent = t('prog.stopping'); });
+  const go = $('go');
+  go.disabled = state.running;
+  go.textContent = state.running ? t('search.running') : t('search.button');
+  if (state.running) document.title = `(${done}/${total}) ${state.query} · ${t('appName')}`;
 }
 
 function limiter(n) {
@@ -345,28 +421,31 @@ function storeSearchLink(store) {
 }
 
 function renderStatus() {
+  renderProgress();
   const box = $('status');
   const entries = Object.entries(state.storeStatus);
   if (!entries.length) { box.hidden = true; return; }
   box.hidden = false;
   box.innerHTML = '';
   const byId = Object.fromEntries(allStores().map(s => [s.id, s]));
-  const order = { ok: 0, none: 1, tab: 2, link: 3, blocked: 4, err: 5, wait: 6 };
+  const order = { ok: 0, none: 1, tab: 2, tabWait: 3, wait: 4, link: 5, blocked: 6, err: 7, stopped: 8 };
   entries.sort((a, b) => order[a[1].state] - order[b[1].state]);
   const needCheck = [];
   for (const [id, st] of entries) {
     const s = byId[id];
     if (!s) continue;
-    const live = st.state === 'wait' || st.state === 'tab';
+    const live = st.state === 'wait' || st.state === 'tab' || st.state === 'tabWait';
     const el = document.createElement(live ? 'span' : 'a');
     el.className = 'st ' + st.state;
     if (!live) { el.href = storeSearchLink(s); el.target = '_blank'; el.rel = 'noopener'; }
     if (st.state === 'ok') el.textContent = `${s.name} ${st.count}${st.viaTab ? ' · ' + t('status.viaTab') : ''}`;
     else if (st.state === 'tab') el.textContent = `${s.name} · ${t('status.tab')}`;
-    else if (st.state === 'blocked') { el.textContent = `${s.name} · ${t('status.blocked')}`; el.title = errText('blocked'); needCheck.push(s); }
+    else if (st.state === 'tabWait') el.textContent = `${s.name} · ${t('status.tabWait')}`;
+    else if (st.state === 'stopped') { el.textContent = `${s.name} · ${t('status.stopped')}`; needCheck.push(s); }
+    else if (st.state === 'blocked') { el.textContent = `${s.name} · ${t('status.blocked')}${st.skipped ? ' · ' + t('status.skipped') : ''}`; el.title = errText('blocked'); needCheck.push(s); }
     else if (st.state === 'none') el.textContent = `${s.name} 0${st.viaTab ? ' · ' + t('status.viaTab') : ''}`;
-    else if (st.state === 'link') { el.textContent = `${s.name} · ${t('status.check')}`; el.className = 'st link'; needCheck.push(s); }
-    else if (st.state === 'err') { el.textContent = `${s.name} · ${t('status.fail')}`; el.title = errText(st.error); needCheck.push(s); }
+    else if (st.state === 'link') { el.textContent = `${s.name} · ${t('status.check')}${st.skipped ? ' · ' + t('status.skipped') : ''}`; el.className = 'st link'; needCheck.push(s); }
+    else if (st.state === 'err') { el.textContent = `${s.name} · ${t('status.fail')} (${errShort(st.error)})${st.skipped ? ' · ' + t('status.skipped') : ''}`; el.title = errText(st.error); needCheck.push(s); }
     else el.textContent = s.name;
     box.appendChild(el);
   }
@@ -390,6 +469,13 @@ const errText = code => {
   const key = 'err.' + code;
   const txt = t(key);
   return txt === key ? t('err.unknown') : txt;
+};
+const errShort = code => {
+  if (!code) return t('errShort.unknown');
+  if (/^HTTP /.test(code)) return code;
+  const key = 'errShort.' + code;
+  const txt = t(key);
+  return txt === key ? t('errShort.unknown') : txt;
 };
 const concText = c => (c === 'extrait' || c === 'parfum') ? t('conc.' + c) : c;
 const SYMBOL = { USD: '$', GBP: '£', EUR: '€', CAD: 'C$', AUD: 'A$', KRW: '₩' };

@@ -117,3 +117,26 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
 .st.tab::after { content: ' …'; }
 .st.blocked { color: var(--warn); text-decoration: underline; }
 .badge.partial { color: var(--warn); }
+
+/* 검색 진행 표시 */
+.progress { margin-top: 10px; padding: 9px 12px 8px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.progRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.progLabel { font-weight: 700; }
+.progDetail { color: var(--muted); }
+.progIcon { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+.progress.running .progIcon { border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+.progress.done .progIcon { background: var(--good); -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6.2 11.6 2.6 8l1.1-1.1 2.5 2.5 6.1-6.1 1.1 1.1z'/%3E%3C/svg%3E") center/100% no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6.2 11.6 2.6 8l1.1-1.1 2.5 2.5 6.1-6.1 1.1 1.1z'/%3E%3C/svg%3E") center/100% no-repeat; }
+.progress.done .progLabel { color: var(--good); }
+.progress.stopped .progIcon { background: var(--warn); border-radius: 3px; }
+.progress.stopped .progLabel { color: var(--warn); }
+.progStop { margin-left: auto; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--chip); color: var(--fg); cursor: pointer; }
+.progStop:disabled { opacity: .6; }
+.progBar { height: 3px; margin-top: 7px; border-radius: 3px; background: var(--chip); overflow: hidden; }
+.progBar span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.progress.done .progBar span { background: var(--good); }
+.progress.done .progBar, .progress.stopped .progBar { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .progress.running .progIcon { animation-duration: 2.4s; } }
+.st.tabWait { color: var(--muted); }
+.st.tabWait::after { content: ' …'; }
+.st.stopped { color: var(--muted); text-decoration: underline; }

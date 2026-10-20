@@ -11,8 +11,8 @@ import { relevance } from './classify.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
 
-const READY_TIMEOUT = 30000;   // 페이지 로드 + 봇 확인 대기
-const EXTRACT_TIMEOUT = 25000; // 데이터 추출 대기
+const READY_TIMEOUT = 20000;   // 페이지 로드 + 봇 확인 대기
+const EXTRACT_TIMEOUT = 15000; // 데이터 추출 대기
 const MAX_PRODUCT_PAGES = 2;
 const RESULT_ATTR = 'data-scentfinder-result';
 
@@ -24,7 +24,23 @@ export function tabsSupported() {
 
 // 열어둔 탭은 검색 화면을 닫을 때도 정리
 const openTabs = new Set();
+const openedUrls = new Set(); // Safari 가 "페이지 열기 실패" 화면으로 바꾸면 탭 id 로 못 닫는 경우가 있어서 주소로도 정리
 addEventListener('pagehide', () => { for (const id of openTabs) { try { api.tabs.remove(id); } catch { /* 무시 */ } } });
+
+// 검색이 끝난 뒤 남아 있는 숨은 탭을 모두 닫음
+export async function cleanupTabs() {
+  for (const id of openTabs) { try { await api.tabs.remove(id); } catch { /* 이미 닫힘 */ } }
+  openTabs.clear();
+  try {
+    const all = await api.tabs.query({});
+    const ids = all.filter(t => !t.active && t.url && openedUrls.has(t.url)).map(t => t.id);
+    if (ids.length) await api.tabs.remove(ids);
+  } catch { /* 무시 */ }
+  openedUrls.clear();
+}
+
+class Stopped extends Error { constructor() { super('stopped'); } }
+const checkStop = signal => { if (signal && signal.aborted) throw new Stopped(); };
 
 async function exec(tabId, func, args = []) {
   const res = await api.scripting.executeScript({ target: { tabId }, func, args });
@@ -34,18 +50,28 @@ async function exec(tabId, func, args = []) {
 // 페이지가 다 열리고 봇 확인 화면이 끝날 때까지 대기
 const HARD_BLOCK = /access denied|request blocked|forbidden/i;  // 기다려도 안 풀리는 차단
 
-async function waitReady(tabId, deadline) {
+async function waitReady(tabId, deadline, signal) {
   let lastChallenge = false;
   let hardSince = 0;
+  let injectFails = 0;
+  const start = Date.now();
   while (Date.now() < deadline) {
-    await sleep(800);
+    await sleep(700);
+    checkStop(signal);
     let info;
     try {
-      info = await exec(tabId, () => ({ rs: document.readyState, title: document.title, old: document.documentElement.hasAttribute('data-scentfinder-old') }));
-    } catch { continue; } // 이동 중이면 실행 실패 → 계속 대기
+      info = await exec(tabId, () => ({ rs: document.readyState, title: document.title, old: document.documentElement.hasAttribute('data-scentfinder-old'), n: document.body ? document.body.innerText.length : 0 }));
+    } catch {
+      // 이동 중이면 실행 실패 → 계속 대기. 8초 넘게 계속 실패하면 페이지 자체가 안 열린 것(Safari "페이지 열기 실패")
+      if (++injectFails > 11) return { ok: false, error: 'pageFailed' };
+      continue;
+    }
+    injectFails = 0;
     if (!info || info.old) continue; // 아직 이전 페이지
     lastChallenge = CHALLENGE_TITLE.test(info.title || '');
     if (info.rs === 'complete' && !lastChallenge) return { ok: true };
+    // 광고·추적 스크립트 때문에 'complete' 가 늦는 무거운 페이지는 내용이 그려졌으면 진행
+    if (info.rs === 'interactive' && !lastChallenge && info.n > 800 && Date.now() - start > 4000) return { ok: true };
     // "Just a moment" 같은 확인 화면은 몇 초 뒤 풀리지만, "Access Denied" 는 기다려도 안 풀려서 6초 뒤 포기
     if (info.rs === 'complete' && HARD_BLOCK.test(info.title || '')) {
       hardSince = hardSince || Date.now();
@@ -228,10 +254,12 @@ async function pageExtract(q, mode, attr) {
     // 배너 가격(예: 구독 $6.95)만 잡히고 끝나지 않도록, 검색어 단어가 들어간 상품이 나올 때까지 기다림
     const qWords = q.toLowerCase().split(/\s+/).filter(w => w.length > 2);
     const hit = it => qWords.some(w => `${it.title} ${it.variant}`.toLowerCase().includes(w));
+    const NO_RESULTS = /no results|(^|[^\d.,])0 results|no products (were )?found|nothing (was )?found|did ?n.t match any|we couldn.t find|sorry, no/i;
     for (let i = 0; i < 10; i++) {
       out.items = fromLd();
       if (!out.items.length) out.items = fromCards();
       if (out.items.some(hit)) break;
+      if (i >= 1 && NO_RESULTS.test(text(document.querySelector('main') || document.body).slice(0, 4000))) { out.noResults = true; break; }
       if (i >= 3 && document.querySelectorAll('a[href]').length > 0 && [...document.querySelectorAll('a[href]')].some(a => qWords.every(w => text(a.parentElement).toLowerCase().includes(w)))) break;
       await sleep(1000);
     }
@@ -288,13 +316,14 @@ async function pageExtract(q, mode, attr) {
   }
 }
 
-async function runExtract(tabId, q, mode, deadline) {
+async function runExtract(tabId, q, mode, deadline, signal) {
   // executeScript 가 비동기 함수의 결과를 돌려주지 않는 Safari 버전도 있어서, 결과는 DOM 속성으로 받음
   let injectErr = false;
   await Promise.race([exec(tabId, pageExtract, [q, mode, RESULT_ATTR]).catch(() => { injectErr = true; }), sleep(1500)]);
   // 주입 오류가 나도 함수가 이미 실행됐을 수 있어서 결과는 잠시 더 확인
   if (injectErr) deadline = Math.min(deadline, Date.now() + 5000);
   while (Date.now() < deadline) {
+    checkStop(signal);
     let raw;
     try { raw = await exec(tabId, a => document.documentElement.getAttribute(a), [RESULT_ATTR]); } catch { raw = null; }
     if (raw) { try { return JSON.parse(raw); } catch { return { error: 'parse' }; } }
@@ -341,9 +370,11 @@ function toItems(out, regionCurrency) {
  * 숨은 탭으로 사이트 검색
  * @returns {{items: object[], mode: 'tab'|'link'|'error', error?: string, blocked?: boolean}}
  */
-export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency, relMin = 0.75 }) {
+export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency, relMin = 0.75, signal }) {
   if (!tabsSupported()) return { items: [], mode: 'error', error: 'noScripting' };
+  if (signal && signal.aborted) return { items: [], mode: 'error', error: 'stopped' };
   const url = (searchUrlOverride || defaultSearchUrl(store)).replace('{q}', encodeURIComponent(q));
+  openedUrls.add(url);
   let tab;
   try {
     tab = await api.tabs.create({ url, active: false });
@@ -352,11 +383,12 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
   }
   openTabs.add(tab.id);
   try {
-    const ready = await waitReady(tab.id, Date.now() + READY_TIMEOUT);
-    if (!ready.ok) return { items: [], mode: 'error', error: ready.blocked ? 'blocked' : 'tabTimeout', blocked: !!ready.blocked };
+    const ready = await waitReady(tab.id, Date.now() + READY_TIMEOUT, signal);
+    if (!ready.ok) return { items: [], mode: 'error', error: ready.error || (ready.blocked ? 'blocked' : 'tabTimeout'), blocked: !!ready.blocked };
 
     const mode = store.type === 'html' ? 'dom' : 'auto';
-    const out = await runExtract(tab.id, q, mode, Date.now() + EXTRACT_TIMEOUT);
+    const out = await runExtract(tab.id, q, mode, Date.now() + EXTRACT_TIMEOUT, signal);
+    if (out.noResults && !(out.items || []).length) return { items: [], mode: 'tab' };
     if (out.error) return { items: [], mode: 'error', error: out.error };
     let items = toItems(out, regionCurrency);
 
@@ -372,10 +404,12 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
         .filter(l => !seen.has(l.href) && seen.add(l.href))
         .slice(0, MAX_PRODUCT_PAGES);
       for (const c of candidates) {
+        checkStop(signal);
+        openedUrls.add(c.href);
         await navigate(tab.id, c.href);
-        const r = await waitReady(tab.id, Date.now() + 20000);
+        const r = await waitReady(tab.id, Date.now() + 15000, signal);
         if (!r.ok) continue;
-        const page = await runExtract(tab.id, q, 'dom', Date.now() + 15000);
+        const page = await runExtract(tab.id, q, 'dom', Date.now() + 12000, signal);
         if (page.error) continue;
         // 상품 페이지 제목에 브랜드가 빠진 경우가 있어서(예: "Aventus Cologne"), 검색 카드 글자를 관련도 판단용으로 붙여둠
         const got = domItems(page, regionCurrency).map(i => ({ ...i, title: i.title || c.text, relHint: c.text }));
@@ -390,7 +424,7 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
     }
     return { items, mode: items.length ? 'tab' : 'link' };
   } catch (e) {
-    return { items: [], mode: 'error', error: 'tabTimeout' };
+    return { items: [], mode: 'error', error: e instanceof Stopped ? 'stopped' : 'tabTimeout' };
   } finally {
     openTabs.delete(tab.id);
     try { await api.tabs.remove(tab.id); } catch { /* 이미 닫힘 */ }

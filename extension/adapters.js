@@ -267,18 +267,28 @@ const ADAPTERS = { shopify, woo, html };
 
 // mode: 'shopify' | 'woo' | 'html' | 'link'(데이터 없음, 직접 확인 필요) | 'error'
 // blocked: 봇 차단으로 판단되면 true
-export async function searchStore(store, q, { detected, searchUrlOverride, regionCurrency, credentials = 'omit' }) {
+export async function searchStore(store, q, { detected, searchUrlOverride, regionCurrency }) {
   const searchUrl = searchUrlOverride || defaultSearchUrl(store);
-  const ctx = { searchUrl, regionCurrency, credentials };
+  // 기본은 쿠키 없이 요청 (v1.1 에서 잘 되던 방식). 쿠키를 붙이면 Safari 에서 정상 몰까지 실패하는 경우가 있어서,
+  // 차단 응답을 받았을 때만 쿠키를 붙여 한 번 더 시도
+  const ctx = { searchUrl, regionCurrency, credentials: 'omit' };
   let order;
   if (store.type === 'auto') order = detected ? [detected] : ['shopify', 'woo', 'html'];
   else order = [store.type];
 
   let lastErr = null;
   let sawBlock = false;
+  const run = async mode => {
+    try {
+      return await ADAPTERS[mode](store, q, ctx);
+    } catch (e) {
+      if (!isBlockedError(e.message)) throw e;
+      return await ADAPTERS[mode](store, q, { ...ctx, credentials: 'include' });
+    }
+  };
   for (const mode of order) {
     try {
-      const items = await ADAPTERS[mode](store, q, ctx);
+      const items = await run(mode);
       const clean = items.filter(i => i && i.title && Number.isFinite(i.price) && i.price > 0);
       if (mode === 'html' && !clean.length) return { items: [], mode: 'link', blocked: sawBlock, detected: null };
       return { items: clean, mode, detected: store.type === 'auto' ? mode : null };
