@@ -611,6 +611,28 @@ function renderResults() {
 // ───────── 시작 ─────────
 $('searchForm').addEventListener('submit', e => { e.preventDefault(); runSearch($('q').value); });
 
+// 상품·사이트 링크는 항상 새 탭으로 (Safari 확장 화면에서는 target="_blank" 가 무시돼 검색 화면이 바뀌는 경우가 있음)
+// 클릭: 새 탭으로 바로 이동 / ⌘ 클릭·가운데 클릭: 검색 화면에 머문 채 뒤에 열기
+let selfTab = null;
+(async () => { try { selfTab = await api.tabs.getCurrent(); } catch { /* 무시 */ } })();
+function openInNewTab(url, background) {
+  const opts = { url, active: !background };
+  if (selfTab && selfTab.index != null) opts.index = selfTab.index + 1;
+  if (selfTab && selfTab.windowId != null) opts.windowId = selfTab.windowId;
+  return api.tabs.create(opts).catch(() => api.tabs.create({ url, active: !background }))
+    .catch(() => { window.open(url, '_blank', 'noopener'); });
+}
+const linkHandler = e => {
+  const a = e.target.closest && e.target.closest('a[href]');
+  if (!a || !/^https?:/i.test(a.href)) return;
+  if (e.type === 'click' && e.button !== 0) return;
+  if (e.type === 'auxclick' && e.button !== 1) return;
+  e.preventDefault();
+  openInNewTab(a.href, e.metaKey || e.ctrlKey || e.button === 1);
+};
+document.addEventListener('click', linkHandler);
+document.addEventListener('auxclick', linkHandler);
+
 function renderAll() {
   applyStatic();
   document.title = state.query ? `${state.query} · ${t('appName')}` : t('appName');
