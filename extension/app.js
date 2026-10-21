@@ -1,8 +1,8 @@
 import { DEFAULT_STORES, REGIONS, defaultSearchUrl } from './stores.js';
 import { searchStore, checkSiteAccess } from './adapters.js';
 import { searchViaTab, tabsSupported, cleanupTabs, snapshotTabs } from './tabs.js';
-import { CATEGORIES, classify, extractSize, extractConcentration, relevance, itemRelevance, isNonFragrance } from './classify.js';
-import { toEnglishQuery } from './ko-search.js';
+import { CATEGORIES, classify, extractSize, extractConcentration, relevance, itemRelevance, splitRelevance, isNonFragrance } from './classify.js';
+import { parseSearch, brandVariants } from './ko-search.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
@@ -30,6 +30,9 @@ const state = {
   results: [],          // 정규화된 결과
   storeStatus: {},      // storeId → { state, count, error }
   query: '',
+  parts: { brand: '', name: '' },   // 검색한 브랜드·향수 이름 (영어)
+  brandVars: [],        // 브랜드 다른 표기 (결과 확인용)
+  conv: null,           // 검색어 변환 결과 (검색창 아래 안내)
   running: false,
 };
 
@@ -228,6 +231,14 @@ function renderAdv() {
 $('optTabs').addEventListener('change', e => { state.opts.tabs = e.target.checked; save('opts'); });
 
 // ───────── 검색 ─────────
+// 관련도: 브랜드를 알면 브랜드·향수 이름을 따로 확인, 모르면 검색어 전체로 확인
+function itemRel(raw, query) {
+  const core = [raw.title, raw.vendor], extra = [raw.variant, raw.relHint || ''];
+  const p = state.parts;
+  if (p && p.brand) return splitRelevance(p.name, state.brandVars, core, extra);
+  return itemRelevance(query, core, extra);
+}
+
 function normalizeItem(raw, store, query) {
   const size = extractSize(raw.variant, raw.title);
   const category = classify(raw, size);
@@ -237,7 +248,7 @@ function normalizeItem(raw, store, query) {
     size, category,
     conc: extractConcentration(`${raw.title} ${raw.variant} ${raw.type}`),
     nonFrag: isNonFragrance(raw),
-    rel: itemRelevance(query, [raw.title, raw.vendor], [raw.variant, raw.relHint || '']),
+    rel: itemRel(raw, query),
   };
 }
 
@@ -251,25 +262,37 @@ function noteTab(id, ok) {
   save('route');
 }
 
-// 검색창 아래 안내: 한글 자동 변환 기능 안내 / 실제로 바꾼 검색어
+// 검색창 아래 안내: 기능 안내 / 실제로 검색한 브랜드·이름
 function renderQueryNote() {
   const el = $('qNote');
   const c = state.conv;
   el.className = 'qNote';
-  if (!c || !c.changed) { el.textContent = t('qnote.hint'); return; }
+  if (!c || (!c.changed && !c.brandAuto)) { el.textContent = t('qnote.hint'); return; }
   if (!c.query) { el.textContent = t('qnote.none'); el.classList.add('warn'); return; }
-  el.textContent = t('qnote.conv', { q: c.query }) + (c.unknown.length ? ' · ' + t('qnote.unknown', { w: c.unknown.join(', ') }) : '');
+  const shown = [c.brand, c.name].filter(Boolean).join(' · ');
+  const parts = [];
+  if (c.changed) parts.push(t('qnote.conv', { q: shown }));
+  else parts.push(t('qnote.split', { q: shown }));
+  if (c.brandAuto) parts.push(t('qnote.brandAuto', { b: c.brand }));
+  if (c.unknown.length) parts.push(t('qnote.unknown', { w: c.unknown.join(', ') }));
+  el.textContent = parts.join(' · ');
   el.classList.add(c.unknown.length ? 'warn' : 'conv');
 }
 
-async function runSearch(input) {
-  input = input.trim();
-  if (!input || state.running) return;
+const formInput = () => [$('qBrand').value, $('qName').value];
+
+async function runSearch(brandInput, nameInput) {
+  brandInput = String(brandInput || '').trim();
+  nameInput = String(nameInput || '').trim();
+  if ((!brandInput && !nameInput) || state.running) return;
   // 한글 브랜드·향수 이름은 영어로 바꿔서 검색 (해외 쇼핑몰은 영어 이름으로만 찾을 수 있음)
-  state.conv = toEnglishQuery(input);
+  // 브랜드 칸이 비어 있으면 이름 칸에서 브랜드를 찾아봄
+  state.conv = parseSearch(brandInput, nameInput);
   renderQueryNote();
   const query = state.conv.query;
   if (!query) return;
+  state.parts = { brand: state.conv.brand, name: state.conv.name };
+  state.brandVars = brandVariants(state.conv.brand);
   state.running = true;
   state.stopped = false;
   state.abort = { aborted: false };
@@ -279,9 +302,12 @@ async function runSearch(input) {
   state.startedAt = Date.now();
   state.finishedAt = 0;
   $('size').value = '';
-  history.replaceState(null, '', `?q=${encodeURIComponent(input)}`);
+  const qs = new URLSearchParams();
+  if (brandInput) qs.set('b', brandInput);
+  if (nameInput) qs.set('n', nameInput);
+  history.replaceState(null, '', `?${qs}`);
   document.title = `${query} · ${t('appName')}`;
-  rememberRecent(input);
+  rememberRecent(brandInput, nameInput);
 
   const stores = allStores().filter(isOn);
   stores.forEach(s => { state.storeStatus[s.id] = { state: 'wait' }; });
@@ -361,13 +387,25 @@ async function runSearch(input) {
         else queueTab(store, fetchRes);
       };
       if (store.tabOnly && canTab) { toTab(null); continue; }
-      const res = await searchStore(store, query, {
+      let res = await searchStore(store, query, {
         detected: state.detected[store.id],
         searchUrlOverride: state.urlOverride[store.id],
         regionCurrency: REGION_CURRENCY[store.region] || 'USD',
       });
       if (res.detected && state.detected[store.id] !== res.detected) { state.detected[store.id] = res.detected; save('detected'); }
       if (res.resetDetected) { delete state.detected[store.id]; save('detected'); }
+      // 브랜드+이름으로 아무것도 안 나오면 이름만으로 한 번 더 (쇼핑몰마다 브랜드 표기가 달라서: Roja / Roja Dove, MFK 등)
+      // 결과의 브랜드 확인은 그대로 하므로 다른 브랜드의 같은 이름은 걸러짐
+      const p = state.parts;
+      if (p.brand && p.name && !signal.aborted && res.items.length === 0 &&
+          res.mode !== 'error' && res.mode !== 'link' && /[a-z]{4,}/i.test(p.name)) {
+        const res2 = await searchStore(store, p.name, {
+          detected: state.detected[store.id],
+          searchUrlOverride: state.urlOverride[store.id],
+          regionCurrency: REGION_CURRENCY[store.region] || 'USD',
+        });
+        if (res2.items.length) res = { ...res, items: res2.items, mode: res2.mode };
+      }
       const failed = res.mode === 'error' || res.mode === 'link';
       if (failed && canTab && !signal.aborted) toTab(res);
       else apply(store, res);
@@ -402,9 +440,9 @@ function renderAccess(blocked) {
     </div>`;
   $('accRequest').addEventListener('click', async () => {
     try { await api.permissions.request({ origins: ['<all_urls>'] }); } catch { /* 지원 안 하면 설정에서 직접 */ }
-    runSearch($('q').value);
+    runSearch(...formInput());
   });
-  $('accRetry').addEventListener('click', () => runSearch($('q').value));
+  $('accRetry').addEventListener('click', () => runSearch(...formInput()));
 }
 
 // ───────── 진행 상태 ─────────
@@ -466,10 +504,13 @@ function limiter(n) {
   return fn => new Promise(resolve => { queue.push({ fn, resolve }); next(); });
 }
 
-async function rememberRecent(q) {
+// 최근 검색어: { b: 브랜드 칸, n: 이름 칸 } (예전 버전의 문자열도 그대로 읽음)
+async function rememberRecent(b, n) {
   try {
     const { recent = [] } = await api.storage.local.get('recent');
-    const next = [q, ...recent.filter(r => r.toLowerCase() !== q.toLowerCase())].slice(0, 10);
+    const key = r => (typeof r === 'string' ? `\u0001${r}` : `${r.b || ''}\u0001${r.n || ''}`).toLowerCase();
+    const cur = { b, n };
+    const next = [cur, ...recent.filter(r => key(r) !== key(cur))].slice(0, 10);
     await api.storage.local.set({ recent: next });
   } catch { /* 무시 */ }
 }
@@ -648,7 +689,7 @@ function renderResults() {
 }
 
 // ───────── 시작 ─────────
-$('searchForm').addEventListener('submit', e => { e.preventDefault(); runSearch($('q').value); });
+$('searchForm').addEventListener('submit', e => { e.preventDefault(); runSearch(...formInput()); });
 
 // 상품·사이트 링크는 항상 새 탭으로 (Safari 확장 화면에서는 target="_blank" 가 무시돼 검색 화면이 바뀌는 경우가 있음)
 // 클릭: 새 탭으로 바로 이동 / ⌘ 클릭·가운데 클릭: 검색 화면에 머문 채 뒤에 열기
@@ -697,7 +738,9 @@ function renderAll() {
   renderQueryNote();
   renderResults();
   ensureRates();
-  const q = new URLSearchParams(location.search).get('q');
-  if (q) { $('q').value = q; runSearch(q); }
-  else $('q').focus();
+  // ?b=브랜드&n=이름 (예전 주소 ?q=검색어 도 지원 → 이름 칸에 넣고 브랜드는 자동 인식)
+  const sp = new URLSearchParams(location.search);
+  const b = sp.get('b') || '', n = sp.get('n') || sp.get('q') || '';
+  if (b || n) { $('qBrand').value = b; $('qName').value = n; runSearch(b, n); }
+  else $('qBrand').focus();
 })();

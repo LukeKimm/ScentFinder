@@ -120,3 +120,16 @@ export function itemRelevance(query, core, extra) {
   if (c < 0.5) return c;
   return Math.max(c, relevance(query, ...core, ...extra));
 }
+
+// 브랜드·향수 이름을 따로 받은 경우의 관련도
+// - 향수 이름: 상품명·브랜드 칸(core)에 이름 단어가 절반 이상 있어야 하고, 그때만 옵션·카드 글자까지 보탬
+// - 브랜드: 상품명·브랜드 칸·카드 글자 어디에든 브랜드(또는 다른 표기)가 보여야 함. 안 보이면 숨김 처리되는 0.5 로 낮춤
+export function splitRelevance(name, brands, core, extra) {
+  if (!name) return Math.max(0, ...brands.map(b => relevance(b, ...core, ...extra)));
+  const nameCore = relevance(name, ...core);
+  if (nameCore < 0.5) return nameCore;
+  const nameFull = Math.max(nameCore, relevance(name, ...core, ...extra));
+  if (!brands.length) return nameFull;
+  const brandScore = Math.max(0, ...brands.map(b => relevance(b, ...core, ...extra)));
+  return brandScore >= 0.5 ? nameFull : Math.min(nameFull, 0.5);
+}
