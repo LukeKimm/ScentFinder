@@ -3,6 +3,9 @@
 set -e
 cd "$(dirname "$0")"
 
+# git pull 할 때 새 파일을 Xcode 프로젝트에 자동 등록하도록 훅 연결 (.githooks/post-merge)
+[ -d .git ] && git config core.hooksPath .githooks || true
+
 if ! xcrun --find safari-web-extension-converter >/dev/null 2>&1; then
   echo "Xcode가 필요합니다. App Store에서 Xcode 설치 후 한 번 실행해 주세요."
   exit 1

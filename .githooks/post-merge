@@ -1,0 +1,7 @@
+#!/bin/sh
+# git pull 뒤 자동 실행: 새로 생긴 확장 파일을 Xcode 프로젝트에 등록 (tools/sync_xcode.py)
+cd "$(git rev-parse --show-toplevel)" || exit 0
+if [ -d xcode/ScentFinder ] && command -v python3 >/dev/null 2>&1; then
+  python3 tools/sync_xcode.py || echo "⚠️  Xcode 프로젝트 등록 실패 — python3 tools/sync_xcode.py 를 직접 실행해 주세요"
+fi
+exit 0
