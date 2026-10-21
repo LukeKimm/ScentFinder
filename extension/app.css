@@ -84,7 +84,7 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
 
 .results { display: grid; gap: 8px; padding: 8px 0 40px; }
 .card { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: center; padding: 10px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); color: inherit; text-decoration: none; }
-.card.soldout { opacity: .55; }
+.card.soldout > :not(.body), .card.soldout .body > :not(.bell) { opacity: .55; }
 .thumb { width: 64px; height: 64px; object-fit: contain; border-radius: 10px; background: #fff; }
 .thumb.noimg { visibility: hidden; }
 .body { min-width: 0; }
@@ -163,3 +163,32 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
   .search .qBrand { flex: 1 1 100%; }
   .search .qName { flex: 1 1 0; }
 }
+
+/* ───────── 재입고 알림 ───────── */
+.panel > summary .sumInfo { margin-left: auto; color: var(--muted); font-weight: 400; }
+.nf { padding: 0 0 4px; }
+.nf > .hint:first-child { margin-top: 0; }
+.nfForm { display: grid; gap: 8px; padding: 0 14px; }
+.nfForm label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.nfForm input { font: inherit; font-size: 15px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.nfBtns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.nfBtns button, .nfItem button { font: inherit; font-size: 13px; font-weight: 600; border-radius: 10px; padding: 7px 12px; border: 0; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
+.nfBtns button.ghost, .nfItem button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+.nfBtns button:disabled, .nfItem button:disabled { opacity: .5; cursor: default; }
+.nfStatus { font-size: 12px; color: var(--muted); padding: 0 14px; margin: 10px 0; }
+.nfStatus.warn { color: var(--warn); }
+.nf > .sub { padding: 0 14px; margin-top: 4px; }
+.nfList { display: grid; gap: 6px; padding: 0 14px; }
+.nfItem { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.nfItem.in { border-color: var(--good); }
+.nfItem.err { border-color: var(--warn); }
+.nfMain { min-width: 0; }
+.nfName { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nfName a { color: inherit; }
+.nfMeta { font-size: 12px; color: var(--muted); }
+.nfList .hint { padding: 0; margin: 0; }
+.bell { justify-self: start; margin-top: 6px; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
+.bell.on { background: var(--accent); color: var(--accent-fg); }
+.bell:disabled { opacity: .6; cursor: default; }
+.toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 12px; background: var(--fg); color: var(--bg); font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.18); z-index: 50; }
+.toast.warn { background: var(--warn); color: var(--bg); }

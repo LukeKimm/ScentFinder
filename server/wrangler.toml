@@ -1,0 +1,14 @@
+# 향수 최저가 — 재입고 알림 서버
+# setup.sh 가 database_id 를 채워 넣습니다.
+name = "scentfinder-alerts"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[triggers]
+crons = ["* * * * *"]   # 1분마다 재고 확인
+
+[[d1_databases]]
+binding = "DB"
+database_name = "scentfinder-alerts"
+database_id = "SET_BY_SETUP"

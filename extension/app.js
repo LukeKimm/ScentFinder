@@ -3,6 +3,7 @@ import { searchStore, checkSiteAccess } from './adapters.js';
 import { searchViaTab, tabsSupported, cleanupTabs, snapshotTabs } from './tabs.js';
 import { CATEGORIES, classify, extractSize, extractConcentration, relevance, itemRelevance, splitRelevance, isNonFragrance } from './classify.js';
 import { parseSearch, brandVariants } from './ko-search.js';
+import * as NF from './notify.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
@@ -654,6 +655,18 @@ function renderResults() {
     if (!i.available) add(t('badge.soldout'), 'out');
     if (i.nonFrag) add(t('badge.nonfrag'), 'nonfrag');
     else if (i.rel < RELEVANCE_MIN) add(t('badge.lowrel'));
+    // 품절 상품: 재입고 알림 버튼 (이미 등록한 상품은 재고가 있어도 표시)
+    const w = NF.watchFor(i.url);
+    if (!i.available || w) {
+      const bell = document.createElement('button');
+      bell.type = 'button';
+      const pend = NF.notify.pending.has(String(i.url).split('#')[0]);
+      bell.className = 'bell' + (w ? ' on' : '');
+      bell.textContent = pend ? t('bell.wait') : w ? t('bell.on') : t('bell.add');
+      bell.disabled = pend;
+      bell.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); onBell(i, w); });
+      node.querySelector('.body').appendChild(bell);
+    }
     node.querySelector('.krw').textContent = fmtKRW(i.krw);
     node.querySelector('.orig').textContent = fmtOrig(i.price, i.currency) + (i.priceMax ? ` ~ ${fmtOrig(i.priceMax, i.currency)}` : '');
     node.querySelector('.perml').textContent = Number.isFinite(i.perml) ? t('perml', { v: fmtKRW(i.perml) }) : '';
@@ -703,6 +716,7 @@ function openInNewTab(url, background) {
     .catch(() => { window.open(url, '_blank', 'noopener'); });
 }
 const linkHandler = e => {
+  if (e.target.closest && e.target.closest('.bell')) return;
   const a = e.target.closest && e.target.closest('a[href]');
   if (!a || !/^https?:/i.test(a.href)) return;
   if (e.type === 'click' && e.button !== 0) return;
@@ -713,9 +727,99 @@ const linkHandler = e => {
 document.addEventListener('click', linkHandler);
 document.addEventListener('auxclick', linkHandler);
 
+// ───────── 재입고 알림 (개발판) ─────────
+let toastTimer = 0;
+function toast(msg, kind = '') {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + kind;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 6000);
+}
+
+function openNotifyPanel() {
+  const p = $('notifyPanel');
+  p.open = true;
+  p.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function onBell(item, w) {
+  if (!NF.configured()) { openNotifyPanel(); toast(t('nf.needSetup'), 'warn'); return; }
+  try {
+    if (w) {
+      await NF.removeWatch(w.id);
+      toast(t('nf.removed'));
+      return;
+    }
+    const res = await NF.addWatch(item, rate(item.currency));
+    if (res.duplicate) toast(t('nf.dup'));
+    else toast(t('nf.added', { tg: NF.sentText(res.sent.telegram), mail: NF.sentText(res.sent.email) }), 'ok');
+  } catch (e) {
+    if (e.code === 'inStock') toast(t('nf.err.inStock', { p: e.data && e.data.price ? ` (${fmtOrig(e.data.price, item.currency)})` : '' }), 'warn');
+    else toast(NF.errText(e.code), 'warn');
+  }
+}
+
+function renderNotify() {
+  const n = NF.notify.watches.length;
+  $('notifyInfo').textContent = !NF.configured() ? t('nf.off') : NF.notify.error ? t('nf.errShort') : t('nf.count', { n });
+  const st = $('nfStatus');
+  st.textContent = NF.statusLine();
+  st.className = 'nfStatus' + (NF.notify.error || !NF.configured() ? ' warn' : '');
+  if (document.activeElement !== $('nfServer')) $('nfServer').value = NF.notify.conf.server;
+  if (document.activeElement !== $('nfToken')) $('nfToken').value = NF.notify.conf.token;
+  $('nfLink').disabled = $('nfTest').disabled = !NF.configured();
+  const box = $('nfList');
+  box.innerHTML = '';
+  if (!n) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = t('nf.empty'); box.appendChild(p); return; }
+  for (const w of NF.notify.watches) {
+    const row = document.createElement('div');
+    row.className = 'nfItem' + (w.inStock ? ' in' : '') + (w.lastError ? ' err' : '');
+    const name = [w.vendor && !w.title.toLowerCase().includes(w.vendor.toLowerCase()) ? w.vendor : '', w.title].filter(Boolean).join(' ');
+    const opt = [w.variant, w.size && !String(w.variant).includes(String(w.size)) ? `${w.size}ml` : '', w.category ? t('catShort.' + w.category) : ''].filter(Boolean).join(' · ');
+    row.innerHTML = `<div class="nfMain"><div class="nfName"><b>${esc(w.storeName)}</b> · <a href="${esc(w.url)}">${esc(name)}</a></div>
+      <div class="nfMeta">${esc(opt)}${opt ? ' · ' : ''}${esc(NF.watchStateText(w))}${NF.checkedText(w) ? ' · ' + esc(NF.checkedText(w)) : ''}</div></div>`;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'ghost';
+    del.textContent = NF.notify.pending.has(w.url) ? t('bell.wait') : t('nf.remove');
+    del.disabled = NF.notify.pending.has(w.url);
+    del.addEventListener('click', async () => {
+      try { await NF.removeWatch(w.id); toast(t('nf.removed')); } catch (e) { toast(NF.errText(e.code), 'warn'); }
+    });
+    row.appendChild(del);
+    box.appendChild(row);
+  }
+}
+
+NF.notify.onChange = () => { renderNotify(); renderResults(); };
+$('nfForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  await NF.saveConf($('nfServer').value, $('nfToken').value);
+  $('nfStatus').textContent = t('nf.loading');
+  await NF.refresh();
+  if (!NF.notify.error && NF.configured()) toast(t('nf.connected'), 'ok');
+});
+$('nfLink').addEventListener('click', async () => {
+  try {
+    const r = await NF.linkTelegram();
+    toast(t('nf.linkOk', { name: r.name || '' }), 'ok');
+    await NF.refresh();
+  } catch (e) { toast(NF.errText(e.code), 'warn'); }
+});
+$('nfTest').addEventListener('click', async () => {
+  try {
+    const r = await NF.sendTest();
+    toast(t('nf.testSent', { tg: NF.sentText(r.sent.telegram), mail: NF.sentText(r.sent.email) }), 'ok');
+  } catch (e) { toast(NF.errText(e.code), 'warn'); }
+});
+$('notifyPanel').addEventListener('toggle', () => { if ($('notifyPanel').open && NF.configured()) NF.refresh(); });
+
 function renderAll() {
   applyStatic();
   renderQueryNote();
+  renderNotify();
   document.title = state.query ? `${state.query} · ${t('appName')}` : t('appName');
   renderChips();
   renderAdv();
@@ -727,6 +831,7 @@ function renderAll() {
 
 (async () => {
   await load();
+  await NF.loadConf();
   await initLang();
   applyStatic();
   document.title = t('appName');
@@ -736,8 +841,10 @@ function renderAll() {
   renderStores();
   renderRates();
   renderQueryNote();
+  renderNotify();
   renderResults();
   ensureRates();
+  if (NF.configured()) NF.refresh();
   // ?b=브랜드&n=이름 (예전 주소 ?q=검색어 도 지원 → 이름 칸에 넣고 브랜드는 자동 인식)
   const sp = new URLSearchParams(location.search);
   const b = sp.get('b') || '', n = sp.get('n') || sp.get('q') || '';

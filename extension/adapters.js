@@ -152,6 +152,7 @@ export function wooItems(data, regionCurrency) {
       currency: p.prices?.currency_code || regionCurrency,
       available: p.is_in_stock !== false,
       url: p.permalink,
+      wooId: p.id,   // 재입고 알림 서버가 이 상품 재고를 확인할 때 사용
       image: p.images?.[0]?.thumbnail || p.images?.[0]?.src || '',
     };
   });
