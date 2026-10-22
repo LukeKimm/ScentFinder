@@ -52,6 +52,7 @@ globalThis.fetch = async (input, init = {}) => {
     net.email.push(b);
     return Response.json({ id: 'e' + net.email.length });
   }
+  if (url === 'https://shop.example/products/naxos.js' && net.busy) { net.shopFetches++; return new Response('Too Many Requests', { status: 429 }); }
   if (url === 'https://shop.example/products/naxos.js') { net.shopFetches++; return Response.json({ title: 'Naxos', handle: 'naxos', variants: shop.variants }); }
   if (url.startsWith('https://shop.example/products/') && url.endsWith('.js')) return new Response('Not found', { status: 404 });
   if (url.startsWith('https://many.example/products/')) {
@@ -162,6 +163,20 @@ console.log('\n--- 재입고 메시지 ---\n' + newTg.find(m => m.chat === '1001
 const n2 = net.telegram.length; await runChecks(env, Date.now()); assert.equal(net.telegram.length, n2); ok('restock → both users alerted once, in their language');
 shop.variants[0].available = false; await runChecks(env, Date.now());
 shop.variants[0].available = true; sum = await runChecks(env, Date.now()); assert.equal(sum.restocked, 2); ok('sold out again → alerted again');
+
+// 7-1. 429(요청 많음)는 차단이 아님: 30분 안에는 오류로 표시하지 않고, 풀리면 그대로 이어서 확인
+net.busy = true;
+const tb = Date.now() + 3600e3;
+await runChecks(env, tb);
+let la = (await req('GET', '/api/alerts', { key: A.key })).body.alerts.find(x => x.url === naxos.url);
+assert.equal(la.lastError, undefined); assert.match(la.lastStatus, /^429/);
+await runChecks(env, tb + 31 * 60e3);
+la = (await req('GET', '/api/alerts', { key: A.key })).body.alerts.find(x => x.url === naxos.url);
+assert.equal(la.lastError, 'busy');
+net.busy = false;
+await runChecks(env, tb + 32 * 60e3);
+la = (await req('GET', '/api/alerts', { key: A.key })).body.alerts.find(x => x.url === naxos.url);
+assert.equal(la.lastError, undefined); ok('429 → not "blocked"; shown only after 30 min; clears when it recovers');
 
 // 8. HTML 상품, 계속 실패 → 6시간 뒤 한 번 경고
 shop.variants[0].available = false; await runChecks(env, Date.now());

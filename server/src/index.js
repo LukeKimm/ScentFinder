@@ -23,6 +23,8 @@ const SUBREQUEST_BUDGET = 44;    // 확인 + 알림 발송 + DB 호출 합계 �
 const CONCURRENCY = 6;           // 동시 연결 상한 (Workers 제한 6)
 const FETCH_TIMEOUT = 10000;
 const ERROR_ALERT_AFTER = 6 * 3600 * 1000;   // 이만큼 계속 확인 실패하면 한 번 알려줌
+const SHOW_ERROR_AFTER = 30 * 60 * 1000;     // 일시적인 실패(요청 많음·응답 없음)는 이만큼 계속될 때만 목록에 오류로 표시
+const TRANSIENT = new Set(['busy', 'timeout', 'network']);
 const CHECKED_AT_EVERY = 10 * 60 * 1000;     // 변화 없을 때 "마지막 확인" 기록 주기 (DB 쓰기 줄이기)
 const LINK_CODE_TTL = 15 * 60 * 1000;
 const EMAIL_TOKEN_TTL = 24 * 3600 * 1000;
@@ -418,7 +420,9 @@ async function get(url, budget, accept) {
 const CHALLENGE = /just a moment|attention required|access denied|verify you are human|are you a robot|pardon our interruption|request unsuccessful/i;
 // 차단 응답의 정보 (원인 파악용으로 알림 기록에 남김)
 const blockInfo = (r, text) => ({ status: r.status, detail: String(((String(text).match(/<title[^>]*>([^<]*)/i) || [])[1]) || String(text).slice(0, 80)).trim().slice(0, 80) });
-const isBlocked = (status, text) => status === 403 || status === 429 || status === 503 ||
+// 429(요청이 너무 많음)·503(잠시 이용 불가)은 차단이 아니라 일시적인 응답 → busy
+const isBusy = status => status === 429 || status === 503;
+const isBlocked = (status, text) => status === 403 ||
   CHALLENGE.test((String(text).match(/<title[^>]*>([^<]*)/i) || [])[1] || '');
 
 export async function checkItem(w, budget) {
@@ -441,6 +445,7 @@ async function checkShopify(w, u, handle, budget) {
   if (error) return { error };
   const text = await r.text();
   if (r.status === 404) return w.kind ? { error: 'notFound' } : { notShopify: true };
+  if (isBusy(r.status)) return { error: 'busy', ...blockInfo(r, text) };
   if (isBlocked(r.status, text)) return w.kind ? { error: 'blocked', ...blockInfo(r, text) } : { notShopify: true, blocked: true };
   let d;
   try { d = JSON.parse(text); } catch { return w.kind ? { error: 'blocked', ...blockInfo(r, text) } : { notShopify: true }; }
@@ -461,6 +466,7 @@ async function checkWoo(w, u, budget) {
   if (skipped) return { skipped: true };
   if (error) return { error };
   const text = await r.text();
+  if (isBusy(r.status)) return { error: 'busy', ...blockInfo(r, text) };
   if (isBlocked(r.status, text)) return w.kind ? { error: 'blocked' } : { notWoo: true };
   let p;
   try { p = JSON.parse(text); } catch { return w.kind ? { error: 'unsupported' } : { notWoo: true }; }
@@ -475,6 +481,7 @@ async function checkHtml(w, budget) {
   if (skipped) return { skipped: true };
   if (error) return { error };
   const text = await r.text();
+  if (isBusy(r.status)) return { error: 'busy', ...blockInfo(r, text) };
   if (isBlocked(r.status, text)) return { error: 'blocked', ...blockInfo(r, text) };
   if (r.status === 404 || r.status === 410) return { error: 'notFound' };
   const offers = extractOffers(text);
@@ -579,15 +586,17 @@ export async function runChecks(env, now) {
       const user = users.get(a.userId);
       let dirty = false;
       if (res.error) {
-        if (a.lastError !== res.error) { a.lastError = res.error; dirty = true; }
-        if (res.status && a.lastStatus !== `${res.status} ${res.detail || ''}`) { a.lastStatus = `${res.status} ${res.detail || ''}`; dirty = true; }
         if (!a.errorSince) { a.errorSince = now; dirty = true; }
+        // 일시적인 실패는 30분 넘게 이어질 때만 오류로 표시 (그 전엔 조용히 다음 분에 다시 확인)
+        const show = !TRANSIENT.has(res.error) || now - a.errorSince >= SHOW_ERROR_AFTER;
+        if (show && a.lastError !== res.error) { a.lastError = res.error; dirty = true; }
+        if (res.status && a.lastStatus !== `${res.status} ${res.detail || ''}`) { a.lastStatus = `${res.status} ${res.detail || ''}`; dirty = true; }
         if (user && !a.errorNotified && now - a.errorSince >= ERROR_ALERT_AFTER && budget.left >= 2) {
           await notifyUser(env, origin, user, messageFor(a, 'error'), budget, store);
           a.errorNotified = true; dirty = true;
         }
       } else {
-        if (a.errorSince || a.lastError) { delete a.errorSince; delete a.errorNotified; delete a.lastError; dirty = true; }
+        if (a.errorSince || a.lastError || a.lastStatus) { delete a.errorSince; delete a.errorNotified; delete a.lastError; delete a.lastStatus; dirty = true; }
         if (res.price && res.price !== a.lastPrice) { a.lastPrice = res.price; dirty = true; }
         if (res.available && !a.inStock) {
           // 알림을 보낼 여유가 없으면 다음 실행에서 다시 (재고 상태를 바꾸지 않음)
