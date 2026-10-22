@@ -745,76 +745,158 @@ function openNotifyPanel() {
 }
 
 async function onBell(item, w) {
-  if (!NF.configured()) { openNotifyPanel(); toast(t('nf.needSetup'), 'warn'); return; }
+  if (!NF.configured()) { toast(t('nf.err.notSet'), 'warn'); return; }
   try {
     if (w) {
       await NF.removeWatch(w.id);
       toast(t('nf.removed'));
       return;
     }
+    if (!NF.notify.me) await NF.refresh();
+    if (!NF.hasChannel()) { openNotifyPanel(); toast(t('nf.needChannel'), 'warn'); return; }
     const res = await NF.addWatch(item, rate(item.currency));
     if (res.duplicate) toast(t('nf.dup'));
-    else toast(t('nf.added', { tg: NF.sentText(res.sent.telegram), mail: NF.sentText(res.sent.email) }), 'ok');
+    else toast(t('nf.added', { where: sentWhere(res.sent) }), 'ok');
   } catch (e) {
     if (e.code === 'inStock') toast(t('nf.err.inStock', { p: e.data && e.data.price ? ` (${fmtOrig(e.data.price, item.currency)})` : '' }), 'warn');
-    else toast(NF.errText(e.code), 'warn');
+    else if (e.code === 'noChannel') { openNotifyPanel(); toast(t('nf.needChannel'), 'warn'); }
+    else toast(NF.errText(e.code, e.data), 'warn');
   }
 }
+// 확인 메시지를 보낸 곳 ("텔레그램·이메일")
+const sentWhere = sent => [sent.telegram === 'ok' ? t('nf.tg.title') : '', sent.email === 'ok' ? t('nf.mail.title') : ''].filter(Boolean).join('·') || '—';
+
+// 버튼 하나 만들기
+function btn(label, onClick, cls = '') {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = cls;
+  b.textContent = label;
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    try { await onClick(); } catch (e) { toast(NF.errText(e.code, e.data), 'warn'); } finally { b.disabled = false; }
+  });
+  return b;
+}
+function line(text, cls = 'nfLine') { const p = document.createElement('p'); p.className = cls; p.textContent = text; return p; }
 
 function renderNotify() {
-  const n = NF.notify.watches.length;
-  $('notifyInfo').textContent = !NF.configured() ? t('nf.off') : NF.notify.error ? t('nf.errShort') : t('nf.count', { n });
+  const N = NF.notify, me = N.me;
+  const n = N.alerts.length;
+  $('notifyInfo').textContent = !NF.configured() ? t('nf.off') : N.error ? t('nf.errShort')
+    : !me ? '' : !NF.hasChannel() ? t('nf.noChannelShort') : t('nf.count', { n });
+
+  // 텔레그램
+  const tg = $('nfTg'); tg.innerHTML = '';
+  if (!NF.configured()) tg.append(line(t('nf.err.notSet'), 'nfLine muted'));
+  else if (me && !me.telegramAvailable) tg.append(line(t('nf.tg.unavailable'), 'nfLine muted'));
+  else if (me && me.telegram) {
+    tg.append(line(t('nf.tg.linked', { name: me.telegram.name || '' }), 'nfLine good'));
+    tg.append(btn(t('nf.tg.unlink'), async () => { await NF.telegramUnlink(); toast(t('nf.tg.unlinked')); }, 'ghost'));
+  } else if (N.tgWaiting) {
+    tg.append(line(t('nf.tg.waiting'), 'nfLine'));
+    tg.append(btn(t('nf.tg.reopen'), async () => openInNewTab(N.tgUrl, false), 'ghost'));
+    tg.append(btn(t('nf.cancel'), async () => NF.telegramCancel(), 'ghost'));
+  } else {
+    tg.append(line(t('nf.tg.how'), 'nfLine muted'));
+    tg.append(btn(t('nf.tg.link'), async () => { const url = await NF.telegramStart(); openInNewTab(url, false); }));
+  }
+
+  // 이메일
+  const mail = $('nfMail'); mail.innerHTML = '';
+  if (!NF.configured()) mail.append(line(t('nf.err.notSet'), 'nfLine muted'));
+  else if (me && !me.emailAvailable) mail.append(line(t('nf.mail.unavailable'), 'nfLine muted'));
+  else if (me && me.email) {
+    mail.append(line(t('nf.mail.on', { email: me.email }), 'nfLine good'));
+    mail.append(btn(t('nf.mail.remove'), async () => { await NF.emailRemove(); toast(t('nf.mail.removed')); }, 'ghost'));
+  } else {
+    if (me && me.emailPending) {
+      mail.append(line(t('nf.mail.pending', { email: me.emailPending }), 'nfLine'));
+      mail.append(btn(t('nf.mail.resend'), async () => { await NF.emailSubmit(me.emailPending); toast(t('nf.mail.sent', { email: me.emailPending }), 'ok'); }, 'ghost'));
+      mail.append(btn(t('nf.mail.checkNow'), async () => { await NF.refresh(); }, 'ghost'));
+      mail.append(btn(t('nf.cancel'), async () => NF.emailRemove(), 'ghost'));
+      return finishNotify();
+    }
+    const row = document.createElement('form');
+    row.className = 'nfRow';
+    const input = document.createElement('input');
+    input.type = 'email'; input.placeholder = t('nf.mail.ph'); input.autocomplete = 'email'; input.required = true;
+    input.setAttribute('autocapitalize', 'off');
+    const go = document.createElement('button');
+    go.type = 'submit'; go.textContent = t('nf.mail.send');
+    row.append(input, go);
+    row.addEventListener('submit', async e => {
+      e.preventDefault();
+      go.disabled = true;
+      try { await NF.emailSubmit(input.value); toast(t('nf.mail.sent', { email: input.value.trim() }), 'ok'); }
+      catch (er) { toast(NF.errText(er.code, er.data), 'warn'); }
+      finally { go.disabled = false; }
+    });
+    mail.append(row);
+    if (me && me.emailLimited) mail.append(line(t('nf.mail.limited'), 'nfLine muted small'));
+  }
+  finishNotify();
+}
+
+// 테스트 버튼·상태·알림 목록·고급
+function finishNotify() {
+  const N = NF.notify, me = N.me, n = N.alerts.length;
+
+  $('nfTest').disabled = !NF.hasChannel();
   const st = $('nfStatus');
-  st.textContent = NF.statusLine();
-  st.className = 'nfStatus' + (NF.notify.error || !NF.configured() ? ' warn' : '');
-  if (document.activeElement !== $('nfServer')) $('nfServer').value = NF.notify.conf.server;
-  if (document.activeElement !== $('nfToken')) $('nfToken').value = NF.notify.conf.token;
-  $('nfLink').disabled = $('nfTest').disabled = !NF.configured();
-  const box = $('nfList');
-  box.innerHTML = '';
-  if (!n) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = t('nf.empty'); box.appendChild(p); return; }
-  for (const w of NF.notify.watches) {
+  st.className = 'nfStatus' + (N.error ? ' warn' : '');
+  st.textContent = N.error ? NF.errText(N.error) : (NF.configured() && me && N.lastRun ? t('nf.lastRun', { when: NF.ago(N.lastRun.at) }) : '');
+
+  // 알림 목록
+  const box = $('nfList'); box.innerHTML = '';
+  if (!n) box.append(line(t('nf.empty'), 'hint'));
+  for (const w of N.alerts) {
     const row = document.createElement('div');
     row.className = 'nfItem' + (w.inStock ? ' in' : '') + (w.lastError ? ' err' : '');
     const name = [w.vendor && !w.title.toLowerCase().includes(w.vendor.toLowerCase()) ? w.vendor : '', w.title].filter(Boolean).join(' ');
     const opt = [w.variant, w.size && !String(w.variant).includes(String(w.size)) ? `${w.size}ml` : '', w.category ? t('catShort.' + w.category) : ''].filter(Boolean).join(' · ');
     row.innerHTML = `<div class="nfMain"><div class="nfName"><b>${esc(w.storeName)}</b> · <a href="${esc(w.url)}">${esc(name)}</a></div>
       <div class="nfMeta">${esc(opt)}${opt ? ' · ' : ''}${esc(NF.watchStateText(w))}${NF.checkedText(w) ? ' · ' + esc(NF.checkedText(w)) : ''}</div></div>`;
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'ghost';
-    del.textContent = NF.notify.pending.has(w.url) ? t('bell.wait') : t('nf.remove');
-    del.disabled = NF.notify.pending.has(w.url);
-    del.addEventListener('click', async () => {
-      try { await NF.removeWatch(w.id); toast(t('nf.removed')); } catch (e) { toast(NF.errText(e.code), 'warn'); }
-    });
+    const del = btn(N.pending.has(w.url) ? t('bell.wait') : t('nf.remove'), async () => { await NF.removeWatch(w.id); toast(t('nf.removed')); }, 'ghost');
+    del.disabled = N.pending.has(w.url);
     row.appendChild(del);
     box.appendChild(row);
   }
+
+  // 고급
+  $('nfCode').value = NF.deviceCode() || '';
+  if (document.activeElement !== $('nfServer')) $('nfServer').value = NF.serverUrl();
 }
 
 NF.notify.onChange = () => { renderNotify(); renderResults(); };
-$('nfForm').addEventListener('submit', async e => {
-  e.preventDefault();
-  await NF.saveConf($('nfServer').value, $('nfToken').value);
-  $('nfStatus').textContent = t('nf.loading');
-  await NF.refresh();
-  if (!NF.notify.error && NF.configured()) toast(t('nf.connected'), 'ok');
-});
-$('nfLink').addEventListener('click', async () => {
-  try {
-    const r = await NF.linkTelegram();
-    toast(t('nf.linkOk', { name: r.name || '' }), 'ok');
-    await NF.refresh();
-  } catch (e) { toast(NF.errText(e.code), 'warn'); }
-});
 $('nfTest').addEventListener('click', async () => {
   try {
     const r = await NF.sendTest();
     toast(t('nf.testSent', { tg: NF.sentText(r.sent.telegram), mail: NF.sentText(r.sent.email) }), 'ok');
-  } catch (e) { toast(NF.errText(e.code), 'warn'); }
+  } catch (e) { toast(NF.errText(e.code, e.data), 'warn'); }
+});
+$('nfCodeCopy').addEventListener('click', async () => {
+  const c = NF.deviceCode();
+  if (!c) return;
+  try { await navigator.clipboard.writeText(c); toast(t('nf.adv.copied'), 'ok'); } catch { $('nfCode').select(); }
+});
+$('nfCodeUse').addEventListener('click', async () => {
+  try { await NF.useDeviceCode($('nfCodeIn').value); $('nfCodeIn').value = ''; toast(t('nf.adv.used'), 'ok'); }
+  catch (e) { toast(NF.errText(e.code, e.data), 'warn'); }
+});
+$('nfServerSave').addEventListener('click', async () => { await NF.setServer($('nfServer').value); toast(NF.notify.error ? NF.errText(NF.notify.error) : t('nf.adv.saved'), NF.notify.error ? 'warn' : 'ok'); });
+$('nfDelete').addEventListener('click', async () => {
+  const b = $('nfDelete');
+  // 두 번 눌러야 삭제 (실수 방지)
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = t('nf.adv.deleteConfirm'); setTimeout(() => { delete b.dataset.armed; b.textContent = t('nf.adv.delete'); }, 5000); return; }
+  delete b.dataset.armed; b.textContent = t('nf.adv.delete');
+  try { await NF.deleteMe(); toast(t('nf.adv.deleted'), 'ok'); } catch (e) { toast(NF.errText(e.code, e.data), 'warn'); }
 });
 $('notifyPanel').addEventListener('toggle', () => { if ($('notifyPanel').open && NF.configured()) NF.refresh(); });
+// 메일 앱이나 텔레그램에서 돌아오면 연결 상태 새로 확인
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && NF.configured() && ($('notifyPanel').open || NF.notify.tgWaiting || (NF.notify.me && NF.notify.me.emailPending))) NF.refresh();
+});
 
 function renderAll() {
   applyStatic();
@@ -844,7 +926,8 @@ function renderAll() {
   renderNotify();
   renderResults();
   ensureRates();
-  if (NF.configured()) NF.refresh();
+  // 이미 알림을 쓰는 기기만 상태를 받아옴 (안 쓰는 사람은 서버에 가입되지 않게)
+  if (NF.configured() && NF.notify.conf.key) NF.refresh();
   // ?b=브랜드&n=이름 (예전 주소 ?q=검색어 도 지원 → 이름 칸에 넣고 브랜드는 자동 인식)
   const sp = new URLSearchParams(location.search);
   const b = sp.get('b') || '', n = sp.get('n') || sp.get('q') || '';

@@ -85,21 +85,29 @@
       <summary><span class="sumTitle" data-i18n="nf.title"></span> <span id="notifyInfo" class="sumInfo"></span></summary>
       <div class="nf">
         <p class="hint" data-i18n="nf.intro"></p>
-        <form id="nfForm" class="nfForm">
-          <label><span data-i18n="nf.server"></span>
-            <input id="nfServer" type="text" inputmode="url" placeholder="https://scentfinder-alerts.○○○.workers.dev" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-          <label><span data-i18n="nf.token"></span>
-            <input id="nfToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-          <div class="nfBtns">
-            <button type="submit" data-i18n="nf.save"></button>
-            <button type="button" id="nfLink" class="ghost" data-i18n="nf.link"></button>
-            <button type="button" id="nfTest" class="ghost" data-i18n="nf.test"></button>
-          </div>
-        </form>
+        <div class="nfSec">
+          <div class="nfHead">✈️ <span data-i18n="nf.tg.title"></span></div>
+          <div id="nfTg" class="nfBody"></div>
+        </div>
+        <div class="nfSec">
+          <div class="nfHead">✉️ <span data-i18n="nf.mail.title"></span></div>
+          <div id="nfMail" class="nfBody"></div>
+        </div>
+        <div class="nfBtns nfPad"><button type="button" id="nfTest" class="ghost" data-i18n="nf.test"></button></div>
         <p id="nfStatus" class="nfStatus"></p>
         <div class="sub" data-i18n="nf.listTitle"></div>
         <div id="nfList" class="nfList"></div>
-        <p class="hint" data-i18n="nf.hint"></p>
+        <details class="nfAdv">
+          <summary data-i18n="nf.adv.title"></summary>
+          <div class="nfAdvBody">
+            <p class="hint" data-i18n="nf.adv.deviceHint"></p>
+            <div class="nfRow"><input id="nfCode" readonly><button type="button" id="nfCodeCopy" class="ghost" data-i18n="nf.adv.copy"></button></div>
+            <div class="nfRow"><input id="nfCodeIn" data-i18n-ph="nf.adv.codePh" autocomplete="off" autocapitalize="off" spellcheck="false"><button type="button" id="nfCodeUse" class="ghost" data-i18n="nf.adv.use"></button></div>
+            <p class="hint" data-i18n="nf.adv.serverHint"></p>
+            <div class="nfRow"><input id="nfServer" type="text" inputmode="url" placeholder="https://…workers.dev" autocomplete="off" autocapitalize="off" spellcheck="false"><button type="button" id="nfServerSave" class="ghost" data-i18n="nf.adv.save"></button></div>
+            <button type="button" id="nfDelete" class="link danger" data-i18n="nf.adv.delete"></button>
+          </div>
+        </details>
       </div>
     </details>
 

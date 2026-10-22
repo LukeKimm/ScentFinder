@@ -12,3 +12,6 @@ crons = ["* * * * *"]   # 1분마다 재고 확인
 binding = "DB"
 database_name = "scentfinder-alerts"
 database_id = "SET_BY_SETUP"
+
+[vars]
+MAX_PER_USER = "30"   # 사용자당 알림 수 상한
