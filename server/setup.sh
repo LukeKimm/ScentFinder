@@ -71,7 +71,7 @@ echo "표 준비 완료"
 step "서버 올리기"
 # 처음이면 workers.dev 주소 이름을 물어볼 수 있어서, 화면에 그대로 보여주면서(script) 기록만 남김
 script -q .deploy.log $W deploy
-URL=$(grep -aoE 'https://[a-zA-Z0-9.-]+\.workers\.dev' .deploy.log | head -1)
+URL=$(grep -aoE 'https://scentfinder-alerts\.[a-z0-9-]+\.workers\.dev' .deploy.log | head -1)
 
 
 
