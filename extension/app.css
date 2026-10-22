@@ -13,6 +13,7 @@
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
+html, body { overflow-x: clip; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", sans-serif; }
 .wrap { max-width: 920px; margin: 0 auto; padding: 0 16px; }
 
@@ -178,14 +179,15 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
 .nfStatus { font-size: 12px; color: var(--muted); padding: 0 14px; margin: 10px 0; }
 .nfStatus.warn { color: var(--warn); }
 .nf > .sub { padding: 0 14px; margin-top: 4px; }
-.nfList { display: grid; gap: 6px; padding: 0 14px; }
-.nfItem { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.nfList { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 0 14px; }
+.nfItem { min-width: 0; display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
 .nfItem.in { border-color: var(--good); }
 .nfItem.err { border-color: var(--warn); }
-.nfMain { min-width: 0; }
+.nfMain { flex: 1 1 auto; min-width: 0; }
+.nfItem > button { flex: 0 0 auto; white-space: nowrap; }
 .nfName { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nfName a { color: inherit; }
-.nfMeta { font-size: 12px; color: var(--muted); }
+.nfMeta { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .nfList .hint { padding: 0; margin: 0; }
 .bell { justify-self: start; margin-top: 6px; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
 .bell.on { background: var(--accent); color: var(--accent-fg); }
@@ -212,3 +214,6 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
 .nfAdvBody button { font: inherit; font-size: 13px; font-weight: 600; border-radius: 10px; padding: 7px 12px; background: transparent; color: var(--fg); border: 1px solid var(--line); cursor: pointer; }
 .nfAdvBody button.link { border: 0; padding: 0; text-align: left; font-weight: 400; text-decoration: underline; }
 .nfAdvBody .danger { color: var(--bad); }
+
+.nf, .nfSec, .nfBody, .nfRow { min-width: 0; }
+.nfLine { overflow-wrap: anywhere; }
