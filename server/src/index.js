@@ -416,6 +416,8 @@ async function get(url, budget, accept) {
 }
 
 const CHALLENGE = /just a moment|attention required|access denied|verify you are human|are you a robot|pardon our interruption|request unsuccessful/i;
+// 차단 응답의 정보 (원인 파악용으로 알림 기록에 남김)
+const blockInfo = (r, text) => ({ status: r.status, detail: String(((String(text).match(/<title[^>]*>([^<]*)/i) || [])[1]) || String(text).slice(0, 80)).trim().slice(0, 80) });
 const isBlocked = (status, text) => status === 403 || status === 429 || status === 503 ||
   CHALLENGE.test((String(text).match(/<title[^>]*>([^<]*)/i) || [])[1] || '');
 
@@ -439,9 +441,9 @@ async function checkShopify(w, u, handle, budget) {
   if (error) return { error };
   const text = await r.text();
   if (r.status === 404) return w.kind ? { error: 'notFound' } : { notShopify: true };
-  if (isBlocked(r.status, text)) return w.kind ? { error: 'blocked' } : { notShopify: true, blocked: true };
+  if (isBlocked(r.status, text)) return w.kind ? { error: 'blocked', ...blockInfo(r, text) } : { notShopify: true, blocked: true };
   let d;
-  try { d = JSON.parse(text); } catch { return w.kind ? { error: 'blocked' } : { notShopify: true }; }
+  try { d = JSON.parse(text); } catch { return w.kind ? { error: 'blocked', ...blockInfo(r, text) } : { notShopify: true }; }
   if (!d || !Array.isArray(d.variants)) return w.kind ? { error: 'unsupported' } : { notShopify: true };
   const vid = u.searchParams.get('variant');
   let v = null;
@@ -473,7 +475,7 @@ async function checkHtml(w, budget) {
   if (skipped) return { skipped: true };
   if (error) return { error };
   const text = await r.text();
-  if (isBlocked(r.status, text)) return { error: 'blocked' };
+  if (isBlocked(r.status, text)) return { error: 'blocked', ...blockInfo(r, text) };
   if (r.status === 404 || r.status === 410) return { error: 'notFound' };
   const offers = extractOffers(text);
   if (!offers.length) return { error: 'unsupported' };
@@ -578,6 +580,7 @@ export async function runChecks(env, now) {
       let dirty = false;
       if (res.error) {
         if (a.lastError !== res.error) { a.lastError = res.error; dirty = true; }
+        if (res.status && a.lastStatus !== `${res.status} ${res.detail || ''}`) { a.lastStatus = `${res.status} ${res.detail || ''}`; dirty = true; }
         if (!a.errorSince) { a.errorSince = now; dirty = true; }
         if (user && !a.errorNotified && now - a.errorSince >= ERROR_ALERT_AFTER && budget.left >= 2) {
           await notifyUser(env, origin, user, messageFor(a, 'error'), budget, store);
