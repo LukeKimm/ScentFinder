@@ -662,7 +662,7 @@ function renderResults() {
       bell.type = 'button';
       const pend = NF.notify.pending.has(String(i.url).split('#')[0]);
       bell.className = 'bell' + (w ? ' on' : '');
-      bell.textContent = pend ? t('bell.wait') : w ? t('bell.on') : t('bell.add');
+      bell.textContent = pend ? t('bell.wait') : w ? t('bell.on') : NF.isSiteOnly(i.storeId) ? t('bell.site') : t('bell.add');
       bell.disabled = pend;
       bell.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); onBell(i, w); });
       node.querySelector('.body').appendChild(bell);
@@ -729,13 +729,19 @@ document.addEventListener('auxclick', linkHandler);
 
 // ───────── 재입고 알림 (개발판) ─────────
 let toastTimer = 0;
-function toast(msg, kind = '') {
+function toast(msg, kind = '', ms = 6000) {
   const el = $('toast');
   el.textContent = msg;
   el.className = 'toast ' + kind;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 6000);
+  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+
+// 서버가 확인할 수 없는 사이트: 상품 페이지를 열고 사이트 자체의 재입고 알림 신청을 안내
+function openSiteAlert(item) {
+  openInNewTab(item.url, false);
+  toast(t('nf.site.how', { store: item.storeName }), 'warn', 12000);
 }
 
 function openNotifyPanel() {
@@ -745,6 +751,7 @@ function openNotifyPanel() {
 }
 
 async function onBell(item, w) {
+  if (!w && NF.isSiteOnly(item.storeId)) { openSiteAlert(item); return; }
   if (!NF.configured()) { toast(t('nf.err.notSet'), 'warn'); return; }
   try {
     if (w) {
@@ -760,6 +767,12 @@ async function onBell(item, w) {
   } catch (e) {
     if (e.code === 'inStock') toast(t('nf.err.inStock', { p: e.data && e.data.price ? ` (${fmtOrig(e.data.price, item.currency)})` : '' }), 'warn');
     else if (e.code === 'noChannel') { openNotifyPanel(); toast(t('nf.needChannel'), 'warn'); }
+    else if (e.code === 'blocked' || e.code === 'unsupported') {
+      // 이 사이트는 서버로 재고 확인 불가 → 다음부터 버튼을 "사이트 알림 신청"으로 바꾸고, 지금 바로 안내
+      await NF.markSiteOnly(item.storeId);
+      renderResults();
+      openSiteAlert(item);
+    }
     else toast(NF.errText(e.code, e.data), 'warn');
   }
 }

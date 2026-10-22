@@ -32,9 +32,21 @@ async function saveConf() {
 }
 export async function loadConf() {
   try {
-    const { notify: c } = await api.storage.local.get('notify');
+    const { notify: c, nfSiteOnly } = await api.storage.local.get(['notify', 'nfSiteOnly']);
     if (c) notify.conf = { server: c.server || '', userId: c.userId || '', key: c.key || '' };
+    if (nfSiteOnly) siteOnly = nfSiteOnly;
   } catch { /* 무시 */ }
+}
+
+// 서버에서 재고를 확인할 수 없는 사이트 (봇 차단 등) → 🔔 를 누르면 사이트 자체의 재입고 알림으로 안내
+// 사이트 사정이 바뀔 수 있어서 7일 뒤에는 다시 서버 확인을 시도
+const SITE_ONLY_DAYS = 7;
+let siteOnly = {};   // storeId → 기록 시각
+export const isSiteOnly = storeId => !!(siteOnly[storeId] && Date.now() - siteOnly[storeId] < SITE_ONLY_DAYS * 864e5);
+export async function markSiteOnly(storeId) {
+  if (!storeId) return;
+  siteOnly[storeId] = Date.now();
+  try { await api.storage.local.set({ nfSiteOnly: siteOnly }); } catch { /* 무시 */ }
 }
 
 async function rawCall(method, path, body, key) {
