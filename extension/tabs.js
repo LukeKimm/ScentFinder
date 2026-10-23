@@ -10,6 +10,9 @@ import { shopifyItems, wooItems, abs, CHALLENGE_TITLE } from './adapters.js';
 import { relevance, itemRelevance } from './classify.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
+// 앱 안에서는 Safari 탭 대신 앱이 만든 안 보이는 웹뷰를 씀 (app-shell/bridge.js 가 같은 모양으로 제공)
+const TABS = globalThis.__SF_TABS__ || api?.tabs;
+const SCRIPTING = globalThis.__SF_SCRIPTING__ || api?.scripting;
 
 const READY_TIMEOUT = 20000;   // 페이지 로드 + 봇 확인 대기
 const EXTRACT_TIMEOUT = 15000; // 데이터 추출 대기
@@ -19,29 +22,29 @@ const RESULT_ATTR = 'data-scentfinder-result';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export function tabsSupported() {
-  return !!(api?.tabs?.create && api?.scripting?.executeScript);
+  return !!(TABS?.create && SCRIPTING?.executeScript);
 }
 
 // 열어둔 탭은 검색 화면을 닫을 때도 정리
 const openTabs = new Set();
 const openedUrls = new Set(); // Safari 가 "페이지 열기 실패" 화면으로 바꾸면 탭 id 로 못 닫는 경우가 있어서 주소로도 정리
-addEventListener('pagehide', () => { for (const id of openTabs) { try { api.tabs.remove(id); } catch { /* 무시 */ } } });
+addEventListener('pagehide', () => { for (const id of openTabs) { try { TABS.remove(id); } catch { /* 무시 */ } } });
 
 // 검색 시작 때 이미 열려 있던 탭(사용자가 연 탭)은 정리 대상에서 빼기 위해 기억
 const userTabs = new Set();
 export async function snapshotTabs() {
   userTabs.clear();
-  try { for (const t of await api.tabs.query({})) userTabs.add(t.id); } catch { /* 무시 */ }
+  try { for (const t of await TABS.query({})) userTabs.add(t.id); } catch { /* 무시 */ }
 }
 
 // 검색이 끝난 뒤 남아 있는 숨은 탭을 모두 닫음 (사용자가 직접 연 탭은 주소가 같아도 건드리지 않음)
 export async function cleanupTabs() {
-  for (const id of openTabs) { try { await api.tabs.remove(id); } catch { /* 이미 닫힘 */ } }
+  for (const id of openTabs) { try { await TABS.remove(id); } catch { /* 이미 닫힘 */ } }
   openTabs.clear();
   try {
-    const all = await api.tabs.query({});
+    const all = await TABS.query({});
     const ids = all.filter(t => !t.active && !userTabs.has(t.id) && t.url && openedUrls.has(t.url)).map(t => t.id);
-    if (ids.length) await api.tabs.remove(ids);
+    if (ids.length) await TABS.remove(ids);
   } catch { /* 무시 */ }
   openedUrls.clear();
 }
@@ -50,7 +53,7 @@ class Stopped extends Error { constructor() { super('stopped'); } }
 const checkStop = signal => { if (signal && signal.aborted) throw new Stopped(); };
 
 async function exec(tabId, func, args = []) {
-  const res = await api.scripting.executeScript({ target: { tabId }, func, args });
+  const res = await SCRIPTING.executeScript({ target: { tabId }, func, args });
   return res?.[0]?.result;
 }
 
@@ -91,7 +94,7 @@ async function waitReady(tabId, deadline, signal) {
 async function navigate(tabId, url) {
   // 이전 페이지에 표시를 남겨서, 새 페이지가 뜨기 전의 화면을 읽지 않게 함
   try { await exec(tabId, () => document.documentElement.setAttribute('data-scentfinder-old', '1')); } catch { /* 무시 */ }
-  await api.tabs.update(tabId, { url });
+  await TABS.update(tabId, { url });
   await sleep(500);
 }
 
@@ -403,7 +406,7 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
   openedUrls.add(url);
   let tab;
   try {
-    tab = await api.tabs.create({ url, active: false });
+    tab = await TABS.create({ url, active: false });
   } catch {
     return { items: [], mode: 'error', error: 'noScripting' };
   }
@@ -465,6 +468,6 @@ export async function searchViaTab(store, q, { searchUrlOverride, regionCurrency
     return { items: [], mode: 'error', error: e instanceof Stopped ? 'stopped' : 'tabTimeout' };
   } finally {
     openTabs.delete(tab.id);
-    try { await api.tabs.remove(tab.id); } catch { /* 이미 닫힘 */ }
+    try { await TABS.remove(tab.id); } catch { /* 이미 닫힘 */ }
   }
 }
