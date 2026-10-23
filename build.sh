@@ -29,6 +29,9 @@ xcrun safari-web-extension-converter ./extension \
   --no-prompt \
   --no-open
 
+# Apple 변환 도구가 빠뜨린 파일(다른 스크립트가 import 하는 ko-names.js 등)을 프로젝트에 등록
+python3 tools/sync_xcode.py
+
 echo ""
 echo "✅ 프로젝트 생성 완료 (번들 ID: $BUNDLE_ID)"
 echo "   Xcode에서 서명(Team) 설정 후 실행하세요. 자세한 순서는 설치안내.md 참고."
