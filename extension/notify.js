@@ -133,8 +133,8 @@ export async function emailRemove() { await call('DELETE', '/api/email'); await 
 export async function sendTest() { return call('POST', '/api/test', { lang: getLang() }); }
 
 // ───────── 알림 ─────────
-/** 품절 상품 알림 등록. item 은 검색 결과 항목, rate 는 그 통화의 원화 환율 */
-export async function addWatch(item, rate) {
+/** 품절 상품 알림 등록. item 은 검색 결과 항목, rate 는 상품 통화 1 = 표시 통화 얼마, dispCur 는 표시 통화 */
+export async function addWatch(item, rate, dispCur) {
   const url = cleanUrl(item.url);
   notify.pending.add(url); changed();
   try {
@@ -142,7 +142,7 @@ export async function addWatch(item, rate) {
       url, storeId: item.storeId, storeName: item.storeName,
       title: item.title, vendor: item.vendor || '', variant: item.variant || '',
       size: item.size || null, category: item.category, price: item.price, currency: item.currency,
-      rate: rate || null, wooId: item.wooId || null, lang: getLang(),
+      rate: rate || null, dispCur: dispCur || 'KRW', wooId: item.wooId || null, lang: getLang(),
     });
     if (!res.duplicate) notify.alerts.unshift(res.alert);
     return res;

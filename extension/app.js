@@ -1,7 +1,7 @@
-import { DEFAULT_STORES, REGIONS, defaultSearchUrl } from './stores.js';
+import { DEFAULT_STORES, REGIONS, defaultSearchUrl, FREE_SHIPPING } from './stores.js';
 import { searchStore, checkSiteAccess } from './adapters.js';
 import { searchViaTab, tabsSupported, cleanupTabs, snapshotTabs } from './tabs.js';
-import { CATEGORIES, classify, extractSize, extractConcentration, relevance, itemRelevance, splitRelevance, isNonFragrance } from './classify.js';
+import { CATEGORIES, classify, extractSize, extractConcentration, relevance, itemRelevance, splitRelevance, isNonFragrance, flankerWords, versionTags } from './classify.js';
 import { parseSearch, brandVariants } from './ko-search.js';
 import * as NF from './notify.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
@@ -24,6 +24,7 @@ const state = {
   urlOverride: {},      // storeId → 검색 URL
   filters: { boxed: true, tester: true, unboxed: true, sample: true, set: true, soldout: false, loose: false },
   sort: 'krw',
+  dispCur: '',          // 표시 통화 (KRW·USD·GBP·EUR·CAD). 비어 있으면 언어·지역으로 정함
   opts: { tabs: true },
   route: {},           // storeId → { tabFails } 탭으로 읽기에 실패한 적 있는 사이트는 탭 순서를 뒤로 미룸
   rateOverride: {},
@@ -40,7 +41,7 @@ const state = {
 // ───────── 저장소 ─────────
 async function load() {
   try {
-    const s = await api.storage.local.get(['enabled', 'custom', 'detected', 'urlOverride', 'filters', 'sort', 'opts', 'route', 'rateOverride', 'rates']);
+    const s = await api.storage.local.get(['enabled', 'custom', 'detected', 'urlOverride', 'filters', 'sort', 'opts', 'route', 'rateOverride', 'rates', 'dispCur']);
     Object.assign(state, {
       enabled: s.enabled || {},
       custom: s.custom || [],
@@ -52,6 +53,7 @@ async function load() {
       route: s.route || {},
       rateOverride: s.rateOverride || {},
       rates: s.rates || null,
+      dispCur: s.dispCur || '',
     });
   } catch { /* 저장소 실패 시 기본값 */ }
 }
@@ -82,6 +84,7 @@ async function ensureRates(force = false) {
   renderRates();
 }
 function rate(cur) {
+  if (cur === 'KRW') return 1;
   const o = parseFloat(state.rateOverride[cur]);
   if (o > 0) return o;
   return state.rates?.values?.[cur] ?? FALLBACK_RATES[cur] ?? NaN;
@@ -107,9 +110,11 @@ function renderRates() {
     lab.insertAdjacentHTML('beforeend', `<span>${t('rates.unit')}</span>`);
     box.appendChild(lab);
   }
-  const usd = rate('USD');
   const tag = Object.keys(state.rateOverride).length ? t('rates.manual') : state.rates?.src === 'auto' ? t('rates.auto') : t('rates.default');
-  $('rateInfo').textContent = `$1 ≈ ₩${Math.round(usd).toLocaleString(numLocale())} (${tag})`;
+  // 표시 통화 기준으로 요약 (원화면 $1 ≈ ₩…, 파운드면 $1 ≈ £…, 달러면 £1 ≈ $…)
+  const d = dispCur();
+  const base = d === 'USD' ? 'GBP' : 'USD';
+  $('rateInfo').textContent = `${SYMBOL[base]}1 ≈ ${fmtMoney(rate(base))} (${tag})`;
 }
 
 // ───────── 사이트 패널 ─────────
@@ -219,11 +224,27 @@ function renderChips() {
   $('optSoldout').checked = !!state.filters.soldout;
   $('optLoose').checked = !!state.filters.loose;
   $('sort').value = state.sort;
+  $('dispCur').innerHTML = DISP_CURRENCIES.map(c => `<option value="${c}">${c} ${SYMBOL[c]}</option>`).join('');
+  $('dispCur').value = dispCur();
 }
 $('optSoldout').addEventListener('change', e => { state.filters.soldout = e.target.checked; save('filters'); renderResults(); });
 $('optLoose').addEventListener('change', e => { state.filters.loose = e.target.checked; save('filters'); renderResults(); });
 $('sort').addEventListener('change', e => { state.sort = e.target.value; save('sort'); renderResults(); });
 $('size').addEventListener('change', () => renderResults());
+$('conc').addEventListener('change', () => renderResults());
+$('dispCur').addEventListener('change', e => { state.dispCur = e.target.value; save('dispCur'); renderRates(); renderResults(); });
+
+// 표시 통화: 직접 고른 값 → 없으면 언어·지역 (한국어 ₩, 영국 £, 캐나다 C$, 유럽 €, 그 외 $)
+const DISP_CURRENCIES = ['KRW', 'USD', 'GBP', 'EUR', 'CAD'];
+function dispCur() {
+  if (DISP_CURRENCIES.includes(state.dispCur)) return state.dispCur;
+  const l = (navigator.language || '').toLowerCase();
+  if (getLang() === 'ko' || l.startsWith('ko')) return 'KRW';
+  if (/-gb$|^en-ie|-uk$/.test(l)) return 'GBP';
+  if (/-ca$/.test(l)) return 'CAD';
+  if (/^(de|fr|it|es|nl|pt|fi|el|sk|sl|et|lv|lt)\b/.test(l)) return 'EUR';
+  return 'USD';
+}
 
 function renderAdv() {
   $('optTabs').checked = !!state.opts.tabs && tabsSupported();
@@ -249,8 +270,16 @@ function normalizeItem(raw, store, query) {
     size, category,
     conc: extractConcentration(`${raw.title} ${raw.variant} ${raw.type}`),
     nonFrag: isNonFragrance(raw),
-    rel: itemRel(raw, query),
+    ...versionAndFlanker(raw, query),
   };
+}
+
+// 검색어에 없는 다른 버전(Elixir, Black Iris, Exclusif 등)은 관련도를 낮춰 "숨긴 결과"로 보냄
+function versionAndFlanker(raw, query) {
+  let rel = itemRel(raw, query);
+  const flanker = flankerWords(query, raw.title, [...(state.brandVars || []), raw.vendor || '']);
+  if (flanker.length && rel >= RELEVANCE_MIN) rel = Math.min(rel, 0.6);
+  return { rel, flanker, ver: versionTags(raw.title, raw.variant) };
 }
 
 // 탭으로 읽기에 실패한 적 있는 사이트도 건너뛰지 않고 매번 다시 시도함.
@@ -564,7 +593,16 @@ function renderStatus() {
 }
 
 // ───────── 결과 ─────────
-const fmtKRW = n => Number.isFinite(n) ? '₩' + Math.round(n).toLocaleString(numLocale()) : '-';
+// 금액 표시: 내부는 원화 기준(krw)으로 계산하고, 화면에는 고른 통화로
+function fmtMoney(krw) {
+  if (!Number.isFinite(krw)) return '-';
+  const c = dispCur();
+  const v = krw / rate(c);
+  if (!Number.isFinite(v)) return '-';
+  if (c === 'KRW') return '₩' + Math.round(v).toLocaleString(numLocale());
+  return SYMBOL[c] + v.toLocaleString(numLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+const fmtKRW = fmtMoney;
 const errText = code => {
   if (!code) return '';
   if (/^HTTP /.test(code)) return code;
@@ -591,10 +629,20 @@ function visibleItems() {
     .filter(i => f[i.category] !== false)
     .filter(i => f.soldout || i.available)
     .filter(i => !sizeSel || String(i.size) === sizeSel)
+    .filter(i => !$('conc').value || (i.conc || '?') === $('conc').value)
     .map(i => {
       const krw = i.price * rate(i.currency);
       return { ...i, krw, perml: i.size ? krw / i.size : NaN };
     });
+}
+
+function renderConcOptions(items) {
+  const sel = $('conc');
+  const cur = sel.value;
+  const order = ['extrait', 'parfum', 'EDP', 'EDT', 'EDC', '?'];
+  const have = [...new Set(items.map(i => i.conc || '?'))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  sel.innerHTML = `<option value="">${esc(t('conc.all'))}</option>` + have.map(c => `<option value="${esc(c)}">${esc(c === '?' ? t('conc.unknown') : concText(c))}</option>`).join('');
+  if (have.includes(cur)) sel.value = cur;
 }
 
 function renderSizeOptions(items) {
@@ -609,11 +657,13 @@ function renderResults() {
   const box = $('results');
   const tpl = $('cardTpl');
   // 용량 목록은 용량 필터를 제외한 결과 기준
-  const sizeSel = $('size').value;
-  $('size').value = '';
+  const sizeSel = $('size').value, concSel = $('conc').value;
+  $('size').value = ''; $('conc').value = '';
   renderSizeOptions(visibleItems());
-  $('size').value = sizeSel;
+  renderConcOptions(visibleItems());
+  $('size').value = sizeSel; $('conc').value = concSel;
   if ($('size').value !== sizeSel) $('size').value = '';
+  if ($('conc').value !== concSel) $('conc').value = '';
 
   let items = visibleItems();
   if (state.sort === 'perml') items.sort((a, b) => (isNaN(a.perml) ? Infinity : a.perml) - (isNaN(b.perml) ? Infinity : b.perml));
@@ -644,6 +694,15 @@ function renderResults() {
     img.addEventListener('error', () => img.classList.add('noimg'));
     node.querySelector('.store').textContent = i.storeName;
     node.querySelector('.region').textContent = REGIONS[i.region]?.flag || '';
+    const fs = FREE_SHIPPING[i.storeId];
+    if (fs) {
+      const [min, cur] = fs;
+      const ship = document.createElement('span');
+      const free = i.currency === cur && i.price >= min;
+      ship.className = 'ship' + (free ? ' free' : '');
+      ship.textContent = free ? t('ship.free') : t('ship.over', { v: fmtOrig(min, cur) });
+      node.querySelector('.meta').appendChild(ship);
+    }
     node.querySelector('.title').textContent = i.vendor && !i.title.toLowerCase().includes(i.vendor.toLowerCase()) ? `${i.vendor} ${i.title}` : i.title;
     node.querySelector('.variant').textContent = i.variant || '';
     const badges = node.querySelector('.badges');
@@ -653,7 +712,9 @@ function renderResults() {
     if (i.size) add(`${i.size}ml`);
     if (i.conc) add(concText(i.conc));
     if (!i.available) add(t('badge.soldout'), 'out');
+    for (const v of i.ver || []) add(t('ver.' + v), 'ver');
     if (i.nonFrag) add(t('badge.nonfrag'), 'nonfrag');
+    else if (i.flanker && i.flanker.length) add(t('badge.flanker', { w: i.flanker.map(w => w[0].toUpperCase() + w.slice(1)).join(' ') }), 'flanker');
     else if (i.rel < RELEVANCE_MIN) add(t('badge.lowrel'));
     // 품절 상품: 재입고 알림 버튼 (이미 등록한 상품은 재고가 있어도 표시)
     const w = NF.watchFor(i.url);
@@ -761,7 +822,7 @@ async function onBell(item, w) {
     }
     if (!NF.notify.me) await NF.refresh();
     if (!NF.hasChannel()) { openNotifyPanel(); toast(t('nf.needChannel'), 'warn'); return; }
-    const res = await NF.addWatch(item, rate(item.currency));
+    const res = await NF.addWatch(item, rate(item.currency) / rate(dispCur()), dispCur());
     if (res.duplicate) toast(t('nf.dup'));
     else toast(t('nf.added', { where: sentWhere(res.sent) }), 'ok');
   } catch (e) {

@@ -217,3 +217,8 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
 
 .nf, .nfSec, .nfBody, .nfRow { min-width: 0; }
 .nfLine { overflow-wrap: anywhere; }
+
+.meta .ship { margin-left: 6px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.meta .ship.free { color: var(--good); font-weight: 600; }
+.badge.flanker { opacity: .85; }
+.badge.ver { background: color-mix(in srgb, var(--warn) 16%, transparent); }

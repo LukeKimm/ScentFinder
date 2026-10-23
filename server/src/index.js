@@ -309,7 +309,8 @@ function sanitizeAlert(b, user) {
     title: str(b.title, 200), variant: str(b.variant, 120), vendor: str(b.vendor, 80),
     size: num(b.size), category: str(b.category, 20),
     price: num(b.price), currency: str(b.currency, 3).toUpperCase() || 'USD',
-    rate: num(b.rate),                       // 등록 때 환율 (원화 환산 표시용)
+    rate: num(b.rate),                       // 등록 때 환율: 상품 통화 1 = 표시 통화 몇 (환산 표시용)
+    dispCur: /^[A-Z]{3}$/.test(str(b.dispCur, 3)) ? str(b.dispCur, 3) : 'KRW',   // 사용자가 보는 통화
     wooId: num(b.wooId), sku: str(b.sku, 60),
     lang: langOf(b.lang || user.lang),
     createdAt: Date.now(),
@@ -679,7 +680,13 @@ const textHtml = text => `<div style="font:15px/1.6 -apple-system,sans-serif;whi
 
 const SYM = { USD: '$', GBP: '£', EUR: '€', CAD: 'C$', AUD: 'A$', KRW: '₩' };
 const money = (p, c) => (p == null ? '' : `${SYM[c] || c + ' '}${Number(p).toFixed(c === 'KRW' ? 0 : 2)}`);
-const krw = (p, rate) => (p && rate ? `₩${Math.round(p * rate).toLocaleString('ko-KR')}` : '');
+// 사용자 통화로 환산 (등록 때 환율 기준). 상품 통화와 같으면 표시 안 함
+const approx = (p, w) => {
+  const c = w.dispCur || 'KRW';
+  if (!p || !w.rate || c === w.currency) return '';
+  const v = p * w.rate;
+  return c === 'KRW' ? `₩${Math.round(v).toLocaleString('ko-KR')}` : money(v, c);
+};
 
 const TEXT = {
   ko: {
@@ -747,7 +754,7 @@ export function messageFor(w, kind) {
   const opt = [w.variant, w.size && !String(w.variant).includes(String(w.size)) ? `${w.size}ml` : '', t.cat[w.category] || '']
     .filter(Boolean).join(' · ');
   const price = kind === 'restock' ? (w.lastPrice ?? w.price) : (w.price ?? w.lastPrice);
-  const priceLine = price != null ? `${money(price, w.currency)}${krw(price, w.rate) ? ` (${t.approx} ${krw(price, w.rate)})` : ''}` : '';
+  const priceLine = price != null ? `${money(price, w.currency)}${approx(price, w) ? ` (${t.approx} ${approx(price, w)})` : ''}` : '';
   const name = [w.vendor && !w.title.toLowerCase().includes(w.vendor.toLowerCase()) ? w.vendor : '', w.title].filter(Boolean).join(' ');
   const foot = kind === 'watch' ? t.watchFoot : kind === 'restock' ? t.restockFoot : t.errorFoot;
   const lines = [

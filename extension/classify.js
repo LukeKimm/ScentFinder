@@ -133,3 +133,32 @@ export function splitRelevance(name, brands, core, extra) {
   const brandScore = Math.max(0, ...brands.map(b => relevance(b, ...core, ...extra)));
   return brandScore >= 0.5 ? nameFull : Math.min(nameFull, 0.5);
 }
+
+// ───────── 다른 버전(플랭커)·구버전 구분 ─────────
+// 기본 향수와 다른 제품을 뜻하는 단어. 검색어·브랜드에 없는데 상품명에 있으면 "다른 버전"으로 봄
+// 예: "Sauvage" 검색 → Sauvage Elixir, "Interlude" 검색 → Interlude Black Iris, "Layton" 검색 → Layton Exclusif
+const FLANKER = new Set(['intense', 'elixir', 'extreme', 'absolu', 'absolute', 'sport', 'night', 'nuit', 'noir', 'black',
+  'gold', 'silver', 'platinum', 'royal', 'exclusif', 'exclusive', 'limited', 'edition', 'collector', 'summer',
+  'fraiche', 'legere', 'eclat', 'tonic']);
+// ※ 'cologne' 은 미국 몰에서 "남성 향수" 뜻으로 흔히 붙여서 제외 (예: "Aventus Cologne By Creed")
+export function flankerWords(query, title, brands = []) {
+  const known = new Set(normalize([query, ...brands].join(' ')).split(' '));
+  // 괄호 속 포장 설명((basic gold cap) 등)과 "gold cap", "black box" 같은 포장 표현은 빼고 봄
+  const clean = String(title).replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+    .replace(/\b(\w+)\s+(cap|caps|box|bottle|label|packaging|atomizer|case)\b/gi, ' ');
+  const words = normalize(clean).split(' ');
+  return [...new Set(words.filter(w => FLANKER.has(w) && !known.has(w)))];
+}
+
+// 구버전·신버전·배치 표기
+const RE_OLD = /\b(vintage|old(er)?\s+(version|formula|batch|packaging|bottle)|original\s+formula|pre[-\s]?reformulat\w*|discontinued)\b/i;
+const RE_NEW = /\b(new\s+(packaging|version|formula|bottle|design)|newer\s+version|reformulated|20[12]\d\s+(version|edition|release))\b/i;
+const RE_BATCH = /\bbatch\b|\blot\s*(no|number|#)/i;
+export function versionTags(title = '', variant = '') {
+  const s = `${title} ${variant}`;
+  const tags = [];
+  if (RE_OLD.test(s)) tags.push('old');
+  if (RE_NEW.test(s)) tags.push('new');
+  if (RE_BATCH.test(s)) tags.push('batch');
+  return tags;
+}

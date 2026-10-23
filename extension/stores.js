@@ -77,3 +77,24 @@ export const DEFAULT_STORES = [
 export function defaultSearchUrl(store) {
   return store.searchUrl || `https://${store.domain}/search?q={q}&type=product`;
 }
+
+// 무료배송 기준 (각 쇼핑몰의 공식 배송 안내·사이트 상단 공지 기준, 2026-10-23 확인)
+// 확인되지 않은 쇼핑몰은 넣지 않음. 바뀔 수 있으니 주기적으로 다시 확인할 것.
+// [기준 금액, 통화, 비고]
+export const FREE_SHIPPING_CHECKED = '2026-10-23';
+export const FREE_SHIPPING = {
+  perfumania: [59, 'USD', 'ground, after discounts'],
+  perfumebox: [59, 'USD', ''],
+  beautyhouse: [99, 'USD', ''],
+  aura: [69, 'USD', 'otherwise flat $6.95'],
+  venba: [100, 'USD', 'standard'],
+  olfactory: [75, 'USD', 'continental US'],
+  arvella: [100, 'USD', ''],
+  ministry: [75, 'USD', 'UPS Ground'],
+  bestbrands: [75, 'USD', ''],
+  beautyencounter: [35, 'USD', 'lower 48 states'],
+  fragflex: [149, 'USD', 'US store'],
+  perfumeclick: [50, 'GBP', ''],
+  allbeauty: [25, 'GBP', 'UK standard'],
+  perfumeshopuk: [25, 'GBP', 'UK standard, non-members'],
+};
