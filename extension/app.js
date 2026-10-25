@@ -12,7 +12,15 @@ const $ = id => document.getElementById(id);
 const REGION_CURRENCY = { US: 'USD', UK: 'GBP', CA: 'CAD', EU: 'EUR', ETC: 'USD' };
 const RATE_CURRENCIES = ['USD', 'GBP', 'CAD', 'EUR'];
 const FALLBACK_RATES = { USD: 1400, GBP: 1850, CAD: 1000, EUR: 1600, KRW: 1 }; // API 실패 시에만 사용
-const RATE_TTL = 6 * 3600 * 1000;
+// 환율: 하루 한 번, 매일 오전 9시(한국 시간, 00:00 UTC) 기준값
+// 환율 API(open.er-api.com)가 매일 00:00 UTC 에 새 값을 내므로, 그 시각이 지나면 다음에 앱을 열거나 검색할 때 한 번 받아옴
+const RATE_DAY_START_UTC_H = 0;
+// 지금 시점의 "오늘 기준 시각" (이 시각 이후에 받은 환율이면 최신)
+function rateCutoff(now = Date.now()) {
+  const d = new Date(now);
+  const c = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), RATE_DAY_START_UTC_H);
+  return now >= c ? c : c - 864e5;
+}
 const CONCURRENCY = 8;
 const TAB_CONCURRENCY = 3;   // 숨은 탭은 동시에 3개까지
 const RELEVANCE_MIN = 0.75;
@@ -68,7 +76,13 @@ const isOn = s => state.enabled[s.id] ?? !s.defaultOff;
 
 // ───────── 환율 ─────────
 async function ensureRates(force = false) {
-  if (!force && state.rates && Date.now() - state.rates.at < RATE_TTL) return;
+  // 오늘 기준 시각 이후에 받은 값이면 그대로 씀 (하루 한 번만 받음)
+  // (API 갱신이 조금 늦으면 30분 뒤에 다시 확인)
+  const r = state.rates;
+  if (!force && r && r.src === 'auto') {
+    const fresh = r.basis ? r.basis >= rateCutoff() - 5 * 60e3 : r.at >= rateCutoff();
+    if (fresh || Date.now() - r.at < 30 * 60e3) return;
+  }
   try {
     const res = await fetch('https://open.er-api.com/v6/latest/USD', { credentials: 'omit' });
     const j = await res.json();
@@ -76,7 +90,9 @@ async function ensureRates(force = false) {
     const krw = j.rates.KRW;
     const values = { KRW: 1 };
     for (const [cur, r] of Object.entries(j.rates)) values[cur] = krw / r;
-    state.rates = { at: Date.now(), src: 'auto', values };
+    // basis: 이 환율의 기준 시각 (API 가 알려준 갱신 시각)
+    const basis = j.time_last_update_unix ? j.time_last_update_unix * 1000 : rateCutoff();
+    state.rates = { at: Date.now(), basis, src: 'auto', values };
     save('rates');
   } catch {
     if (!state.rates) state.rates = { at: 0, src: 'fallback', values: { ...FALLBACK_RATES } };
@@ -110,7 +126,11 @@ function renderRates() {
     lab.insertAdjacentHTML('beforeend', `<span>${t('rates.unit')}</span>`);
     box.appendChild(lab);
   }
-  const tag = Object.keys(state.rateOverride).length ? t('rates.manual') : state.rates?.src === 'auto' ? t('rates.auto') : t('rates.default');
+  const basis = state.rates?.src === 'auto' && state.rates.basis
+    ? new Date(state.rates.basis).toLocaleString(numLocale(), getLang() === 'ko' ? { month: 'long', day: 'numeric', hour: 'numeric', timeZone: 'Asia/Seoul' } : { month: 'short', day: 'numeric', hour: 'numeric' })
+    : '';
+  const tag = Object.keys(state.rateOverride).length ? t('rates.manual')
+    : state.rates?.src === 'auto' ? (basis ? t('rates.basis', { d: basis }) : t('rates.auto')) : t('rates.default');
   // 표시 통화 기준으로 요약 (원화면 $1 ≈ ₩…, 파운드면 $1 ≈ £…, 달러면 £1 ≈ $…)
   const d = dispCur();
   const base = d === 'USD' ? 'GBP' : 'USD';
@@ -454,6 +474,7 @@ async function runSearch(brandInput, nameInput) {
   renderStores();
   renderStatus();
   renderResults();
+  if (!state.stopped) rememberBest(brandInput, nameInput, state.best);
 }
 
 // ───────── 사이트 접근 권한 안내 ─────────
@@ -534,15 +555,86 @@ function limiter(n) {
   return fn => new Promise(resolve => { queue.push({ fn, resolve }); next(); });
 }
 
-// 최근 검색어: { b: 브랜드 칸, n: 이름 칸 } (예전 버전의 문자열도 그대로 읽음)
+// ───────── 검색 기록 ─────────
+// recent: [{ b: 브랜드 칸, n: 이름 칸, t: 검색 시각, best: { v: 최저가(원), s: 쇼핑몰 } }] — 최근 것이 앞
+// (예전 버전은 문자열 또는 {b, n} 만 저장)
+const HISTORY_MAX = 30;
+const histKey = r => (typeof r === 'string' ? `\u0001${r}` : `${r.b || ''}\u0001${r.n || ''}`).toLowerCase();
+const histNorm = r => (typeof r === 'string' ? { b: '', n: r } : r);
+let history_ = [];
+async function loadHistory() {
+  try { const { recent = [] } = await api.storage.local.get('recent'); history_ = recent.map(histNorm); } catch { history_ = []; }
+}
+async function saveHistory() {
+  try { await api.storage.local.set({ recent: history_.slice(0, HISTORY_MAX) }); } catch { /* 무시 */ }
+  renderHistory();
+}
+// 검색을 시작할 때: 맨 앞으로 (지난번 최저가는 새 결과가 나올 때까지 그대로 보여줌)
 async function rememberRecent(b, n) {
-  try {
-    const { recent = [] } = await api.storage.local.get('recent');
-    const key = r => (typeof r === 'string' ? `\u0001${r}` : `${r.b || ''}\u0001${r.n || ''}`).toLowerCase();
-    const cur = { b, n };
-    const next = [cur, ...recent.filter(r => key(r) !== key(cur))].slice(0, 10);
-    await api.storage.local.set({ recent: next });
-  } catch { /* 무시 */ }
+  await loadHistory();
+  const cur = { b, n };
+  const old = history_.find(r => histKey(r) === histKey(cur));
+  history_ = [{ ...cur, t: Date.now(), best: old && old.best }, ...history_.filter(r => histKey(r) !== histKey(cur))];
+  await saveHistory();
+}
+// 검색이 끝났을 때: 찾은 최저가를 기록에 남김
+async function rememberBest(b, n, best) {
+  const i = history_.findIndex(r => histKey(r) === histKey({ b, n }));
+  if (i < 0) return;
+  history_[i] = { ...history_[i], best: best ? { v: Math.round(best.krw), s: best.storeName } : null };
+  await saveHistory();
+}
+function histWhen(ts) {
+  if (!ts) return '';
+  const d = new Date(ts), now = new Date();
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 864e5);
+  const time = d.toLocaleTimeString(numLocale(), { hour: 'numeric', minute: '2-digit' });
+  if (diff === 0) return t('hist.today', { time });
+  if (diff === 1) return t('hist.yesterday');
+  return d.toLocaleDateString(numLocale(), { month: 'short', day: 'numeric' });
+}
+function searchFromHistory(r) {
+  closeSheet();
+  $('qBrand').value = r.b || ''; $('qName').value = r.n || '';
+  scrollTo({ top: 0 });
+  runSearch(r.b, r.n);
+}
+function renderHistory() {
+  // 기록 시트: 전체 목록
+  const list = $('histList');
+  list.innerHTML = '';
+  $('histEmpty').hidden = history_.length > 0;
+  $('histClear').hidden = !history_.length;
+  for (const r of history_) {
+    const row = document.createElement('div');
+    row.className = 'histRow';
+    const go = document.createElement('button');
+    go.type = 'button'; go.className = 'histGo';
+    const main = r.n || r.b;
+    go.innerHTML = `<span class="histText"><span class="histName">${esc(main)}</span>${r.n && r.b ? `<span class="histBrand">${esc(r.b)}</span>` : ''}</span>
+      <span class="histSide"><span class="histPrice">${r.best ? esc(fmtMoney(r.best.v)) : ''}</span><span class="histWhen">${esc(histWhen(r.t))}</span></span>`;
+    go.title = r.best ? t('hist.bestAt', { store: r.best.s }) : '';
+    go.addEventListener('click', () => searchFromHistory(r));
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'histDel';
+    del.setAttribute('aria-label', t('hist.delete', { q: main }));
+    del.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+    del.addEventListener('click', () => { history_ = history_.filter(x => histKey(x) !== histKey(r)); saveHistory(); });
+    row.append(go, del);
+    list.appendChild(row);
+  }
+  // 첫 화면: 최근 검색 몇 개를 바로 누를 수 있게
+  const quick = $('recentQuick');
+  quick.innerHTML = '';
+  $('recentBox').hidden = !!state.query || !history_.length;
+  for (const r of history_.slice(0, 8)) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'recentChip';
+    b.innerHTML = `<span class="rcName">${esc(r.n || r.b)}</span>${r.n && r.b ? `<span class="rcBrand">${esc(r.b)}</span>` : ''}`;
+    b.addEventListener('click', () => searchFromHistory(r));
+    quick.appendChild(b);
+  }
 }
 
 function storeSearchLink(store) {
@@ -685,6 +777,7 @@ function renderResults() {
   // 최저가 카드
   const best = items.find(i => i.available && !i.partial && (i.category === 'boxed' || i.category === 'tester' || i.category === 'unboxed'))
     || items.find(i => i.available && !i.partial);
+  state.best = best || null;
   const bestBox = $('best');
   if (best) {
     bestBox.hidden = false;
@@ -755,6 +848,7 @@ function renderResults() {
   box.appendChild(frag);
 
   const empty = $('empty');
+  $('recentBox').hidden = !!state.query || !history_.length;
   if (!state.query) { empty.hidden = false; empty.textContent = t('empty.start'); }
   else if (!items.length && !state.running) {
     empty.hidden = false;
@@ -832,32 +926,39 @@ function openNotifyPanel() {
 }
 
 // ───────── 설정 시트 (사이트·환율·고급·재입고 알림) ─────────
-let sheetReturn = null;
-function openSettings() {
-  const sh = $('settings');
-  if (!sh.hidden) return;
-  sheetReturn = document.activeElement;
+let sheetReturn = null, sheetOpen = null;
+function openSheet(id, opener) {
+  if (sheetOpen === id) return;
+  if (sheetOpen) closeSheet(true);
+  const sh = $(id);
+  sheetReturn = opener || document.activeElement;
+  sheetOpen = id;
   sh.hidden = false; $('sheetScrim').hidden = false;
   document.documentElement.classList.add('sheetOpen');
-  $('openSettings').setAttribute('aria-expanded', 'true');
-  requestAnimationFrame(() => { sh.classList.add('in'); $('sheetScrim').classList.add('in'); $('closeSettings').focus({ preventScroll: true }); });
+  if (opener) opener.setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => { sh.classList.add('in'); $('sheetScrim').classList.add('in'); sh.querySelector('.sheetClose').focus({ preventScroll: true }); });
 }
-function closeSettings() {
-  const sh = $('settings');
-  if (sh.hidden) return;
+function closeSheet(instant = false) {
+  if (!sheetOpen) return;
+  const sh = $(sheetOpen);
+  sheetOpen = null;
   sh.classList.remove('in'); $('sheetScrim').classList.remove('in');
   document.documentElement.classList.remove('sheetOpen');
-  $('openSettings').setAttribute('aria-expanded', 'false');
-  const done = () => { sh.hidden = true; $('sheetScrim').hidden = true; };
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) done(); else setTimeout(done, 220);
-  if (sheetReturn && sheetReturn.focus) sheetReturn.focus({ preventScroll: true });
+  document.querySelectorAll('[aria-controls][aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+  const done = () => { if (sheetOpen !== sh.id) sh.hidden = true; if (!sheetOpen) $('sheetScrim').hidden = true; };
+  if (instant || matchMedia('(prefers-reduced-motion: reduce)').matches) done(); else setTimeout(done, 220);
+  if (!instant && sheetReturn && sheetReturn.focus) sheetReturn.focus({ preventScroll: true });
 }
+const openSettings = () => openSheet('settings', $('openSettings'));
 // 스크롤하면 머리 아래에 선을 그어 내용과 구분
 addEventListener('scroll', () => document.querySelector('.top').classList.toggle('scrolled', scrollY > 4), { passive: true });
 $('openSettings').addEventListener('click', openSettings);
-$('closeSettings').addEventListener('click', closeSettings);
-$('sheetScrim').addEventListener('click', closeSettings);
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('settings').hidden) closeSettings(); });
+$('openHistory').addEventListener('click', async () => { await loadHistory(); renderHistory(); openSheet('history', $('openHistory')); });
+$('recentAll').addEventListener('click', () => $('openHistory').click());
+document.querySelectorAll('.sheetClose').forEach(b => b.addEventListener('click', () => closeSheet()));
+$('sheetScrim').addEventListener('click', () => closeSheet());
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetOpen) closeSheet(); });
+$('histClear').addEventListener('click', () => { history_ = []; saveHistory(); });
 
 async function onBell(item, w) {
   if (!w && NF.isSiteOnly(item.storeId)) { openSiteAlert(item); return; }
@@ -1031,6 +1132,7 @@ function renderAll() {
   renderRates();
   renderStatus();
   renderResults();
+  renderHistory();
 }
 
 (async () => {
@@ -1046,6 +1148,8 @@ function renderAll() {
   renderRates();
   renderQueryNote();
   renderNotify();
+  await loadHistory();
+  renderHistory();
   renderResults();
   ensureRates();
   // 이미 알림을 쓰는 기기만 상태를 받아옴 (안 쓰는 사람은 서버에 가입되지 않게)

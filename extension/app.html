@@ -12,6 +12,7 @@
       <div class="topRow">
         <h1><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="12.5" y="2.5" width="7" height="7" rx="1.2"/><rect x="14" y="9" width="4" height="3"/><path d="M8 13.5c0-1.1.9-2 2-2h12c1.1 0 2 .9 2 2V27c0 1.1-.9 2-2 2H10c-1.1 0-2-.9-2-2z" class="glass"/><path d="M9.6 20h12.8v6.4c0 .6-.5 1-1 1H10.6c-.6 0-1-.4-1-1z" class="juice"/></svg><span data-i18n="appName"></span></h1>
         <div class="langSwitch" id="langSwitch"></div>
+        <button type="button" id="openHistory" class="iconBtn" data-i18n-title="hist.title" aria-controls="history" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/></svg><span data-i18n="hist.button"></span></button>
         <button type="button" id="openSettings" class="iconBtn" data-i18n-title="settings.title" aria-controls="settings" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span data-i18n="settings.title"></span></button>
       </div>
       <form id="searchForm" class="search">
@@ -59,6 +60,10 @@
     </details>
     <div id="results" class="results"></div>
     <p id="empty" class="emptyMsg" hidden></p>
+    <section id="recentBox" class="recentBox" hidden>
+      <div class="recentHead"><h2 data-i18n="hist.recent"></h2><button type="button" id="recentAll" class="link" data-i18n="hist.all"></button></div>
+      <div id="recentQuick" class="recentQuick"></div>
+    </section>
     <p id="hiddenNote" class="hiddenNote" hidden></p>
   </main>
 
@@ -66,7 +71,7 @@
   <aside id="settings" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="sheetHead">
       <h2 id="settingsTitle" data-i18n="settings.title"></h2>
-      <button type="button" id="closeSettings" class="sheetClose" data-i18n="settings.done"></button>
+      <button type="button" class="sheetClose" data-i18n="settings.done"></button>
     </div>
     <div class="sheetBody">
     <details class="panel" id="storePanel">
@@ -136,6 +141,19 @@
       </div>
       </details>
 
+    </div>
+  </aside>
+
+  <aside id="history" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+    <div class="sheetHead">
+      <h2 id="historyTitle" data-i18n="hist.title"></h2>
+      <button type="button" class="sheetClose" data-i18n="settings.done"></button>
+    </div>
+    <div class="sheetBody">
+      <p class="hint histHint" data-i18n="hist.hint"></p>
+      <div id="histList" class="histList"></div>
+      <p id="histEmpty" class="histEmpty" data-i18n="hist.empty" hidden></p>
+      <button type="button" id="histClear" class="link danger histClear" data-i18n="hist.clear"></button>
     </div>
   </aside>
 
