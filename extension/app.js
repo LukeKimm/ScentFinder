@@ -5,6 +5,7 @@ import { CATEGORIES, classify, extractSize, extractConcentration, relevance, ite
 import { parseSearch, brandVariants } from './ko-search.js';
 import * as NF from './notify.js';
 import { t, initLang, getLang, applyStatic, mountLangSwitch, numLocale } from './i18n.js';
+import { startTour, shouldShowTour } from './tour.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
 const $ = id => document.getElementById(id);
@@ -959,6 +960,7 @@ document.querySelectorAll('.sheetClose').forEach(b => b.addEventListener('click'
 $('sheetScrim').addEventListener('click', () => closeSheet());
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetOpen) closeSheet(); });
 $('histClear').addEventListener('click', () => { history_ = []; saveHistory(); });
+$('replayTour').addEventListener('click', () => { closeSheet(true); scrollTo({ top: 0 }); startTour(); });
 
 async function onBell(item, w) {
   if (!w && NF.isSiteOnly(item.storeId)) { openSiteAlert(item); return; }
@@ -1121,6 +1123,12 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && NF.configured() && ($('notifyPanel').open || NF.notify.tgWaiting || (NF.notify.me && NF.notify.me.emailPending))) NF.refresh();
 });
 
+// 언어 전환: 머리(넓은 화면)와 설정 시트 두 곳
+function mountLangs() {
+  mountLangSwitch($('langSwitch'), () => { mountLangs(); renderAll(); });
+  mountLangSwitch($('langSwitch2'), () => { mountLangs(); renderAll(); });
+}
+
 function renderAll() {
   applyStatic();
   renderQueryNote();
@@ -1141,7 +1149,7 @@ function renderAll() {
   await initLang();
   applyStatic();
   document.title = t('appName');
-  mountLangSwitch($('langSwitch'), renderAll);
+  mountLangs();
   renderChips();
   renderAdv();
   renderStores();
@@ -1158,5 +1166,20 @@ function renderAll() {
   const sp = new URLSearchParams(location.search);
   const b = sp.get('b') || '', n = sp.get('n') || sp.get('q') || '';
   if (b || n) { $('qBrand').value = b; $('qName').value = n; runSearch(b, n); }
-  else $('qBrand').focus();
+  await hideSplash();
+  // 처음 쓰는 사람: 사용법 둘러보기 (검색어를 갖고 열린 경우는 다음에)
+  if (!b && !n && await shouldShowTour()) startTour(() => $('qBrand').focus());
+  else if (!b && !n) $('qBrand').focus();
 })();
+
+// 앱을 열 때 보이는 소개 화면: 최소 1.2초 보여주고 사라짐
+function hideSplash() {
+  const root = document.documentElement;
+  if (!root.classList.contains('sf-splash')) return Promise.resolve();
+  const wait = Math.max(0, 1200 - performance.now());
+  return new Promise(resolve => setTimeout(() => {
+    root.classList.add('splash-out');
+    setTimeout(() => { root.classList.remove('sf-splash', 'splash-out'); resolve(); },
+      matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 420);
+  }, wait));
+}

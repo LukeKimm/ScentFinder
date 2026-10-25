@@ -7,11 +7,28 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
+  <!-- 앱을 열 때 잠깐 보이는 소개 (앱에서만: html.sf-splash) -->
+  <div id="splash" class="splash" aria-hidden="true">
+    <svg class="splashBottle" viewBox="0 0 120 160">
+      <defs>
+        <clipPath id="splashJuiceClip"><path d="M24 70 H96 V140 L90 146 H30 L24 140 Z"/></clipPath>
+        <linearGradient id="splashJuice" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ecc27a"/><stop offset="1" stop-color="#a8741f"/></linearGradient>
+        <linearGradient id="splashCap" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b48a45"/><stop offset=".35" stop-color="#f0d39a"/><stop offset="1" stop-color="#8f6a2f"/></linearGradient>
+      </defs>
+      <rect x="44" y="8" width="32" height="30" rx="3" fill="url(#splashCap)"/>
+      <rect x="51" y="38" width="18" height="9" fill="#e9e1f0" opacity=".5"/>
+      <rect class="splashJuice" x="24" y="56" width="72" height="92" fill="url(#splashJuice)" clip-path="url(#splashJuiceClip)"/>
+      <path d="M16 56 L23 48 H97 L104 56 V144 L97 152 H23 L16 144 Z" fill="#fff" fill-opacity=".08" stroke="#fff" stroke-opacity=".75" stroke-width="2"/>
+      <rect x="22" y="58" width="3.5" height="84" rx="1.75" fill="#fff" opacity=".45"/>
+    </svg>
+    <div class="splashName" data-i18n="appName"></div>
+    <p class="splashTag" data-i18n="splash.tag"></p>
+  </div>
   <header class="top">
     <div class="wrap">
       <div class="topRow">
         <h1><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="12.5" y="2.5" width="7" height="7" rx="1.2"/><rect x="14" y="9" width="4" height="3"/><path d="M8 13.5c0-1.1.9-2 2-2h12c1.1 0 2 .9 2 2V27c0 1.1-.9 2-2 2H10c-1.1 0-2-.9-2-2z" class="glass"/><path d="M9.6 20h12.8v6.4c0 .6-.5 1-1 1H10.6c-.6 0-1-.4-1-1z" class="juice"/></svg><span data-i18n="appName"></span></h1>
-        <div class="langSwitch" id="langSwitch"></div>
+        <div class="langSwitch topLang" id="langSwitch"></div>
         <button type="button" id="openHistory" class="iconBtn" data-i18n-title="hist.title" aria-controls="history" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/></svg><span data-i18n="hist.button"></span></button>
         <button type="button" id="openSettings" class="iconBtn" data-i18n-title="settings.title" aria-controls="settings" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span data-i18n="settings.title"></span></button>
       </div>
@@ -74,6 +91,8 @@
       <button type="button" class="sheetClose" data-i18n="settings.done"></button>
     </div>
     <div class="sheetBody">
+      <div class="setRow"><span data-i18n="lang.label"></span><div class="langSwitch" id="langSwitch2"></div></div>
+      <a id="appGuideSlot" class="setRow setLink" href="__shell/Base.lproj/Main.html" hidden><span data-i18n="settings.safari"></span><span class="chev" aria-hidden="true"></span></a>
     <details class="panel" id="storePanel">
       <summary><span class="sumTitle" data-i18n="stores.title"></span> <span id="storeCount"></span></summary>
       <div id="storeGroups"></div>
@@ -141,6 +160,7 @@
       </div>
       </details>
 
+      <button type="button" id="replayTour" class="setRow setLink setBtn"><span data-i18n="tour.replay"></span><span class="chev" aria-hidden="true"></span></button>
     </div>
   </aside>
 

@@ -62,13 +62,13 @@ button { font: inherit; color: inherit; }
 }
 .top.scrolled { border-bottom-color: var(--line); }
 .topRow { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; min-height: 34px; }
-h1 { margin: 0 auto 0 0; display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+h1 { margin: 0 auto 0 0; min-width: 0; white-space: nowrap; display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
 .mark { width: 24px; height: 24px; flex: none; }
 .mark rect { fill: var(--fg); }
 .mark .glass { fill: none; stroke: var(--fg); stroke-width: 1.6; }
 .mark .juice { fill: var(--juice); }
 .langSwitch { display: inline-flex; background: color-mix(in srgb, var(--fg) 7%, transparent); border-radius: 999px; padding: 2px; }
-.langSwitch button { font-size: 12px; border: 0; background: transparent; color: var(--muted); padding: 5px 10px; border-radius: 999px; cursor: pointer; }
+.langSwitch button { white-space: nowrap; font-size: 12px; border: 0; background: transparent; color: var(--muted); padding: 5px 10px; border-radius: 999px; cursor: pointer; }
 .langSwitch button[aria-pressed="true"] { background: var(--surface); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 .iconBtn {
   display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 11px 0 9px;
@@ -132,10 +132,10 @@ h1 { margin: 0 auto 0 0; display: flex; align-items: center; gap: 8px; font-size
 }
 .chip input:checked + span { background: var(--btn); border-color: var(--btn); color: var(--btn-fg); }
 .chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
-.selects { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; font-size: 12px; color: var(--muted); }
+.selects { display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); gap: 6px; font-size: 12px; color: var(--muted); }
 .selects label { position: relative; display: grid; gap: 1px; padding: 6px 28px 6px 11px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--hair); }
 .selects label::after { content: ''; position: absolute; right: 11px; top: 50%; width: 6px; height: 6px; margin-top: -1px; border-right: 1.5px solid var(--faint); border-bottom: 1.5px solid var(--faint); transform: translateY(-50%) rotate(45deg); pointer-events: none; }
-.selects select { -webkit-appearance: none; appearance: none; border: 0; background: transparent; padding: 0; font-size: 14px; font-weight: 600; color: var(--fg); width: 100%; cursor: pointer; }
+.selects select { -webkit-appearance: none; appearance: none; border: 0; background: transparent; padding: 0; font-size: 14px; font-weight: 600; color: var(--fg); width: 100%; cursor: pointer; text-overflow: ellipsis; }
 .selects select:focus-visible { outline: none; }
 .selects label:focus-within { border-color: var(--accent); }
 select { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 5px 8px; }
@@ -385,6 +385,72 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
 .histClear { display: block; margin: 16px auto 0; font-size: 13px; }
 .link.danger { color: var(--bad); }
 
+/* ───────── 앱을 열 때 소개 화면 (앱에서만) ───────── */
+.splash { display: none; }
+html.sf-splash .splash {
+  display: flex; position: fixed; inset: 0; z-index: 100; flex-direction: column; align-items: center; justify-content: center;
+  padding: 24px; text-align: center; color: #f2eef6;
+  background: radial-gradient(120% 70% at 50% 38%, #4a3d5c 0%, #2a2233 45%, #17121c 100%);
+}
+html.sf-splash body { overflow: hidden; }
+html.splash-out .splash { opacity: 0; transition: opacity .4s ease; }
+.splashBottle { width: 104px; height: 139px; margin-bottom: 26px; filter: drop-shadow(0 18px 24px rgba(0,0,0,.45)); }
+/* 한 번의 움직임: 병에 향수가 차오름 */
+.splashJuice { transform-box: fill-box; transform-origin: 50% 100%; animation: sfFill 1s .1s cubic-bezier(.3,.7,.2,1) both; }
+@keyframes sfFill { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+.splashName { font-size: 27px; font-weight: 700; letter-spacing: -0.02em; }
+.splashTag { margin: 10px 0 0; max-width: 30ch; font-size: 14px; line-height: 1.6; color: rgba(242, 238, 246, .72); white-space: pre-line; }
+.splashName, .splashTag { animation: sfRise .6s .35s ease both; }
+@keyframes sfRise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .splashJuice, .splashName, .splashTag { animation: none; } }
+
+/* 설정 시트 위쪽 줄 (언어, Safari 확장, 사용법) */
+.setRow {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 50px;
+  margin: 10px 0; padding: 8px 12px 8px 15px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--hair);
+  font-size: 15px; font-weight: 600; color: var(--fg); text-decoration: none;
+}
+.setBtn { width: 100%; cursor: pointer; text-align: left; }
+.setRow .chev { width: 8px; height: 8px; margin-right: 6px; border-right: 1.5px solid var(--faint); border-bottom: 1.5px solid var(--faint); transform: rotate(-45deg); }
+.setLink { color: var(--fg); }
+
+/* ───────── 사용법 둘러보기 ───────── */
+.tour { position: fixed; inset: 0; z-index: 60; opacity: 0; transition: opacity .2s; }
+.tour.in { opacity: 1; }
+.tour.center { background: rgba(20, 17, 24, .55); }
+.tourSpot {
+  position: fixed; pointer-events: none; box-shadow: 0 0 0 9999px rgba(20, 17, 24, .55), 0 0 0 2px var(--accent);
+  transition: left .25s, top .25s, width .25s, height .25s;
+}
+.tour.center .tourSpot { display: none; }
+.tourCard {
+  position: fixed; padding: 18px 18px 14px; border-radius: 18px; background: var(--surface); color: var(--fg);
+  box-shadow: 0 20px 50px -18px rgba(0,0,0,.55); transition: top .25s, left .25s;
+}
+.tourStep { font-size: 12px; color: var(--accent); font-weight: 600; min-height: 0; }
+.tourStep:empty { display: none; }
+.tourTitle { margin: 4px 0 6px; font-size: 18px; line-height: 1.35; letter-spacing: -0.02em; }
+.tourText { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
+.tourBtns { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; }
+.tourNav { display: flex; gap: 6px; margin-left: auto; }
+.tourSkip { border: 0; background: none; color: var(--muted); font-size: 14px; padding: 8px 2px; cursor: pointer; }
+.tourPrev, .tourNext { border-radius: 999px; padding: 9px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.tourPrev { border: 1px solid var(--line); background: transparent; color: var(--fg); }
+.tourNext { border: 0; background: var(--btn); color: var(--btn-fg); }
+.tourPreview { margin: -2px 0 14px; padding: 12px; border-radius: 12px; background: var(--bg); display: grid; gap: 8px; }
+.tourPreview[hidden] { display: none !important; }
+.pvLabel { display: grid; justify-items: center; gap: 2px; padding: 10px; background: var(--surface); border: 1px solid var(--line); outline: 1px solid var(--line); outline-offset: -5px; border-radius: 3px; }
+.pvLbl { font-size: 10px; color: var(--muted); }
+.pvVal { font-family: var(--serif); font-size: 24px; line-height: 1.1; }
+.pvTtl { font-family: var(--serif); font-size: 12px; color: var(--muted); }
+.pvRow { display: flex; align-items: center; gap: 10px; padding: 6px 8px; background: var(--surface); border-radius: 8px; }
+.pvThumb { width: 26px; height: 26px; border-radius: 6px; background: var(--raise); flex: none; }
+.pvLines { flex: 1; display: grid; gap: 5px; }
+.pvLines i { display: block; height: 6px; border-radius: 3px; background: var(--line); }
+.pvLines i + i { width: 60%; }
+.pvPrice { font-family: var(--serif); font-size: 13px; }
+html.touring body { overflow: hidden; }
+
 /* 넓은 화면: 라벨은 병 라벨 크기로 */
 @media (min-width: 700px) {
   .best .label { max-width: 520px; margin: 0 auto; }
@@ -392,6 +458,7 @@ select { font: inherit; font-size: 14px; color: var(--fg); background: var(--sur
 
 /* ───────── 좁은 화면 (아이폰) ───────── */
 @media (max-width: 560px) {
+  .topLang { display: none; }
   .top.scrolled .qNote { display: none; }
   .top.scrolled .topRow { margin-bottom: 8px; }
   .search { grid-template-columns: minmax(0, 1fr) auto; }
