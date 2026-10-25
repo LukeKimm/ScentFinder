@@ -459,8 +459,6 @@ html.touring body { overflow: hidden; }
 /* ───────── 좁은 화면 (아이폰) ───────── */
 @media (max-width: 560px) {
   .topLang { display: none; }
-  .top.scrolled .qNote { display: none; }
-  .top.scrolled .topRow { margin-bottom: 8px; }
   .search { grid-template-columns: minmax(0, 1fr) auto; }
   .search .qBrand { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--hair); }
   .selects label { padding: 5px 20px 5px 9px; }
