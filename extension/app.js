@@ -1172,14 +1172,14 @@ function renderAll() {
   else if (!b && !n) $('qBrand').focus();
 })();
 
-// 앱을 열 때 보이는 소개 화면: 최소 1.2초 보여주고 사라짐
+// 앱을 열 때 보이는 소개 화면: 최소 2초 보여주고 사라짐
 function hideSplash() {
   const root = document.documentElement;
   if (!root.classList.contains('sf-splash')) return Promise.resolve();
-  const wait = Math.max(0, 1200 - performance.now());
+  const wait = Math.max(0, 2000 - performance.now());
   return new Promise(resolve => setTimeout(() => {
     root.classList.add('splash-out');
     setTimeout(() => { root.classList.remove('sf-splash', 'splash-out'); resolve(); },
-      matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 420);
+      matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 520);
   }, wait));
 }
