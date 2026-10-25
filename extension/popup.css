@@ -1,22 +1,24 @@
 :root {
-  --bg: #faf8f5; --fg: #1d1a17; --muted: #7a726a; --line: #e6e0d8; --accent: #8a5a2b; --accent-fg: #fff; --chip: #f0ebe4;
+  --bg: #ecebef; --surface: #ffffff; --fg: #231d2c; --muted: #645d6f; --line: #dcd8e1; --accent: #5d4b86;
+  --btn: #231d2c; --btn-fg: #f6f4f8; --chip: #e2e0e7; --juice: #9c6a1c;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #1b1916; --fg: #f2ede7; --muted: #a39a90; --line: #3a352f; --accent: #d39a5c; --accent-fg: #1b1916; --chip: #2a2622; }
+  :root { --bg: #17131b; --surface: #211c27; --fg: #ece8f1; --muted: #a8a0b3; --line: #342e3c; --accent: #b9a8dc; --btn: #ece8f1; --btn-fg: #1a161f; --chip: #2a2531; --juice: #dcab5f; }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; min-width: 300px; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; min-width: 300px; }
 form { padding: 14px; display: grid; gap: 10px; }
 .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.brand { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+.brand { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 15px; letter-spacing: -0.015em; }
+.brand img { width: 22px; height: 22px; border-radius: 5px; }
 .langSwitch { display: inline-flex; background: var(--chip); border-radius: 999px; padding: 2px; }
 .langSwitch button { font: inherit; font-size: 11px; border: 0; background: transparent; color: var(--muted); padding: 3px 8px; border-radius: 999px; }
-.langSwitch button[aria-pressed="true"] { background: var(--bg); color: var(--fg); font-weight: 600; }
+.langSwitch button[aria-pressed="true"] { background: var(--surface); color: var(--fg); font-weight: 600; }
 .row { display: flex; gap: 6px; }
-input { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--fg); }
+input { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--fg); }
 input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-button[type=submit] { font: inherit; font-weight: 600; padding: 0 14px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-fg); }
+button[type=submit] { font: inherit; font-weight: 650; padding: 0 16px; border: 0; border-radius: 12px; background: var(--btn); color: var(--btn-fg); cursor: pointer; }
 #recent { display: flex; flex-wrap: wrap; gap: 6px; }
-#recent button { font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 999px; border: 0; background: var(--chip); color: var(--fg); }
+#recent button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
 .link { font: inherit; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0; text-align: left; text-decoration: underline; }

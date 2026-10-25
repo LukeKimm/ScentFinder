@@ -553,10 +553,20 @@ function storeSearchLink(store) {
 function renderStatus() {
   renderProgress();
   const box = $('status');
+  const wrap = $('statusBox');
   const entries = Object.entries(state.storeStatus);
-  if (!entries.length) { box.hidden = true; return; }
-  box.hidden = false;
+  if (!entries.length) { wrap.hidden = true; return; }
+  wrap.hidden = false;
   box.innerHTML = '';
+  // 접힌 줄: 사이트별 결과 요약 (직접 확인할 곳이 있으면 강조)
+  {
+    const all = entries.length;
+    const okN = entries.filter(([, e]) => e.state === 'ok').length;
+    const chkN = entries.filter(([, e]) => ['link', 'blocked', 'err', 'stopped'].includes(e.state)).length;
+    const sum = $('statusSum');
+    sum.innerHTML = `<span class="sumMain">${esc(t('status.sum', { all, ok: okN }))}</span>` +
+      (chkN && !state.running ? `<span class="sumCheck">${esc(t('status.sumCheck', { n: chkN }))}</span>` : '');
+  }
   const byId = Object.fromEntries(allStores().map(s => [s.id, s]));
   const order = { ok: 0, none: 1, tab: 2, tabWait: 3, wait: 4, link: 5, blocked: 6, err: 7, stopped: 8 };
   entries.sort((a, b) => order[a[1].state] - order[b[1].state]);
@@ -678,9 +688,18 @@ function renderResults() {
   const bestBox = $('best');
   if (best) {
     bestBox.hidden = false;
-    bestBox.innerHTML = `<div class="lbl">${esc(t('best.label'))}${state.running ? esc(t('best.running')) : ''}</div>
+    // 향수병 라벨처럼: 가장 낮은 가격을 가운데 크게
+    const bestTitle = best.vendor && !best.title.toLowerCase().includes(best.vendor.toLowerCase()) ? `${best.vendor} ${best.title}` : best.title;
+    const tags = [best.size ? `${best.size}ml` : '', t('catShort.' + best.category), best.conc ? concText(best.conc) : ''].filter(Boolean);
+    bestBox.innerHTML = `<div class="label">
+      <div class="lbl">${esc(t('best.label'))}${state.running ? esc(t('best.running')) : ''}</div>
       <div class="val">${fmtKRW(best.krw)}</div>
-      <div class="det">${esc(best.storeName)} · ${esc(best.title)}${best.size ? ` · ${best.size}ml` : ''} · ${esc(t('catShort.' + best.category))} · ${fmtOrig(best.price, best.currency)} · <a href="${esc(best.url)}" target="_blank" rel="noopener">${esc(t('best.open'))}</a></div>`;
+      <div class="orig">${esc(fmtOrig(best.price, best.currency))}</div>
+      <div class="rule" aria-hidden="true"></div>
+      <div class="ttl">${esc(bestTitle)}</div>
+      <div class="tags">${tags.map(x => `<span>${esc(x)}</span>`).join('')}</div>
+      <a class="go" href="${esc(best.url)}" target="_blank" rel="noopener">${esc(t('best.go', { store: best.storeName }))}</a>
+    </div>`;
   } else bestBox.hidden = true;
 
   box.innerHTML = '';
@@ -806,10 +825,39 @@ function openSiteAlert(item) {
 }
 
 function openNotifyPanel() {
+  openSettings();
   const p = $('notifyPanel');
   p.open = true;
-  p.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setTimeout(() => p.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 }
+
+// ───────── 설정 시트 (사이트·환율·고급·재입고 알림) ─────────
+let sheetReturn = null;
+function openSettings() {
+  const sh = $('settings');
+  if (!sh.hidden) return;
+  sheetReturn = document.activeElement;
+  sh.hidden = false; $('sheetScrim').hidden = false;
+  document.documentElement.classList.add('sheetOpen');
+  $('openSettings').setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => { sh.classList.add('in'); $('sheetScrim').classList.add('in'); $('closeSettings').focus({ preventScroll: true }); });
+}
+function closeSettings() {
+  const sh = $('settings');
+  if (sh.hidden) return;
+  sh.classList.remove('in'); $('sheetScrim').classList.remove('in');
+  document.documentElement.classList.remove('sheetOpen');
+  $('openSettings').setAttribute('aria-expanded', 'false');
+  const done = () => { sh.hidden = true; $('sheetScrim').hidden = true; };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) done(); else setTimeout(done, 220);
+  if (sheetReturn && sheetReturn.focus) sheetReturn.focus({ preventScroll: true });
+}
+// 스크롤하면 머리 아래에 선을 그어 내용과 구분
+addEventListener('scroll', () => document.querySelector('.top').classList.toggle('scrolled', scrollY > 4), { passive: true });
+$('openSettings').addEventListener('click', openSettings);
+$('closeSettings').addEventListener('click', closeSettings);
+$('sheetScrim').addEventListener('click', closeSettings);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('settings').hidden) closeSettings(); });
 
 async function onBell(item, w) {
   if (!w && NF.isSiteOnly(item.storeId)) { openSiteAlert(item); return; }

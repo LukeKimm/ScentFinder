@@ -10,8 +10,9 @@
   <header class="top">
     <div class="wrap">
       <div class="topRow">
-        <h1 data-i18n="appName"></h1>
+        <h1><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="12.5" y="2.5" width="7" height="7" rx="1.2"/><rect x="14" y="9" width="4" height="3"/><path d="M8 13.5c0-1.1.9-2 2-2h12c1.1 0 2 .9 2 2V27c0 1.1-.9 2-2 2H10c-1.1 0-2-.9-2-2z" class="glass"/><path d="M9.6 20h12.8v6.4c0 .6-.5 1-1 1H10.6c-.6 0-1-.4-1-1z" class="juice"/></svg><span data-i18n="appName"></span></h1>
         <div class="langSwitch" id="langSwitch"></div>
+        <button type="button" id="openSettings" class="iconBtn" data-i18n-title="settings.title" aria-controls="settings" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span data-i18n="settings.title"></span></button>
       </div>
       <form id="searchForm" class="search">
         <input id="qBrand" class="qBrand" type="search" data-i18n-ph="search.brandPh" data-i18n-title="search.brandTitle" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -50,6 +51,24 @@
       </div>
     </section>
 
+    <div id="access" class="access" role="alert" hidden></div>
+    <div id="best" class="best" hidden></div>
+    <details id="statusBox" class="statusBox" hidden>
+      <summary id="statusSum"></summary>
+      <div id="status" class="status"></div>
+    </details>
+    <div id="results" class="results"></div>
+    <p id="empty" class="emptyMsg" hidden></p>
+    <p id="hiddenNote" class="hiddenNote" hidden></p>
+  </main>
+
+  <div id="sheetScrim" class="scrim" hidden></div>
+  <aside id="settings" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="sheetHead">
+      <h2 id="settingsTitle" data-i18n="settings.title"></h2>
+      <button type="button" id="closeSettings" class="sheetClose" data-i18n="settings.done"></button>
+    </div>
+    <div class="sheetBody">
     <details class="panel" id="storePanel">
       <summary><span class="sumTitle" data-i18n="stores.title"></span> <span id="storeCount"></span></summary>
       <div id="storeGroups"></div>
@@ -71,23 +90,23 @@
       <div class="panelFoot">
         <button type="button" id="resetDetect" class="link" data-i18n="stores.redetect"></button>
       </div>
-    </details>
+      </details>
 
-    <details class="panel" id="ratePanel">
+      <details class="panel" id="ratePanel">
       <summary><span class="sumTitle" data-i18n="rates.title"></span> <span id="rateInfo"></span></summary>
       <div class="rates" id="rateInputs"></div>
       <p class="hint" data-i18n="rates.hint"></p>
-    </details>
+      </details>
 
-    <details class="panel" id="advPanel">
+      <details class="panel" id="advPanel">
       <summary><span class="sumTitle" data-i18n="adv.title"></span></summary>
       <div class="advRows">
         <label class="advRow"><input type="checkbox" id="optTabs"><span data-i18n="adv.tabs"></span></label>
       </div>
       <p class="hint" data-i18n="adv.hint"></p>
-    </details>
+      </details>
 
-    <details class="panel" id="notifyPanel">
+      <details class="panel" id="notifyPanel">
       <summary><span class="sumTitle" data-i18n="nf.title"></span> <span id="notifyInfo" class="sumInfo"></span></summary>
       <div class="nf">
         <p class="hint" data-i18n="nf.intro"></p>
@@ -115,15 +134,10 @@
           </div>
         </details>
       </div>
-    </details>
+      </details>
 
-    <div id="access" class="access" role="alert" hidden></div>
-    <div id="status" class="status" hidden></div>
-    <div id="best" class="best" hidden></div>
-    <div id="results" class="results"></div>
-    <p id="empty" class="emptyMsg" hidden></p>
-    <p id="hiddenNote" class="hiddenNote" hidden></p>
-  </main>
+    </div>
+  </aside>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
