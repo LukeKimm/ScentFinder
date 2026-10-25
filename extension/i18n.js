@@ -535,12 +535,18 @@ export const LANGS = [
 
 let lang = 'ko';
 
+// 처음엔 기기(아이폰·Mac) 시스템 언어로 시작. 사용자가 직접 바꾸면 그 선택을 기억(langChoice)
+// 앱에서는 앱이 기기 언어를 알려줌(__SF_SYSLANG__): 앱 웹뷰의 navigator.language 는 앱이 지원하는 언어로 바뀌어 있을 수 있음
+export function systemLang() {
+  const l = String(globalThis.__SF_SYSLANG__ || (navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase();
+  return l.startsWith('ko') ? 'ko' : 'en';
+}
 export async function initLang() {
   try {
-    const { lang: saved } = await api.storage.local.get('lang');
-    if (saved && DICT[saved]) { lang = saved; return lang; }
+    const { langChoice } = await api.storage.local.get('langChoice');
+    if (langChoice && DICT[langChoice]) { lang = langChoice; return lang; }
   } catch { /* 무시 */ }
-  lang = (navigator.language || '').toLowerCase().startsWith('ko') ? 'ko' : 'en';
+  lang = systemLang();
   return lang;
 }
 
@@ -549,7 +555,7 @@ export function getLang() { return lang; }
 export async function setLang(code) {
   if (!DICT[code]) return;
   lang = code;
-  try { await api.storage.local.set({ lang: code }); } catch { /* 무시 */ }
+  try { await api.storage.local.set({ langChoice: code }); } catch { /* 무시 */ }
 }
 
 export function t(key, vars) {
